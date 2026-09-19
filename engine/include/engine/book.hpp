@@ -30,6 +30,10 @@ class Book {
   private:
     std::vector<ProposedFill> plan_match(const Order &incoming) const;
     void unlink_and_maybe_erase_level(Node *node);
+    template <typename SideMap>
+    void unlink_and_maybe_erase_from_level(SideMap &side_map, Node *node);
+    template <typename SideMap>
+    void get_or_create_level(SideMap &side_map, Price price, Node *node);
 
     std::map<Price, Level, std::greater<Price>> bids_;
     std::map<Price, Level> asks_;
