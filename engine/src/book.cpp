@@ -38,42 +38,30 @@ std::vector<ProposedFill> Book::plan_match(const Order &incoming) const {
     Quantity remaining = incoming.quantity;
 
     if (incoming.side == Side::Buy) {
-        for (auto level_it = asks_.begin(); level_it != asks_.end();
-             ++level_it) {
-
-            if (remaining < 0)
-                break;
+        for (auto level_it = asks_.begin();
+             level_it != asks_.end() && remaining > 0; ++level_it) {
             if (level_it->first > incoming.price)
                 break;
 
             const Level &level = level_it->second;
-            for (Node *node = level.head; node; node = node->next) {
-                if (remaining < 0)
-                    break;
-
+            for (Node *node = level.head; node && remaining > 0;
+                 node = node->next) {
                 Quantity fill_qty = std::min(remaining, node->order.quantity);
-                ProposedFill fill = {node, level_it->first, fill_qty};
-                fills.push_back(fill);
+                fills.push_back({node, level_it->first, fill_qty});
                 remaining -= fill_qty;
             }
         }
     } else {
-        for (auto level_it = bids_.begin(); level_it != bids_.end();
-             ++level_it) {
-
-            if (remaining < 0)
-                break;
+        for (auto level_it = bids_.begin();
+             level_it != bids_.end() && remaining > 0; ++level_it) {
             if (level_it->first < incoming.price)
                 break;
 
             const Level &level = level_it->second;
-            for (Node *node = level.head; node; node = node->next) {
-                if (remaining < 0)
-                    break;
-
+            for (Node *node = level.head; node && remaining > 0;
+                 node = node->next) {
                 Quantity fill_qty = std::min(remaining, node->order.quantity);
-                ProposedFill fill = {node, level_it->first, fill_qty};
-                fills.push_back(fill);
+                fills.push_back({node, level_it->first, fill_qty});
                 remaining -= fill_qty;
             }
         }
@@ -97,11 +85,6 @@ std::vector<Trade> Book::add_order(Order incoming) {
         if (fill.passive_node->order.quantity == 0) {
             Node *node = fill.passive_node;
             OrderId passive_id = node->order.id;
-
-            if (node->prev)
-                node->prev->next = node->next;
-            if (node->next)
-                node->next->prev = node->prev;
 
             unlink_and_maybe_erase_level(node);
 
@@ -171,11 +154,6 @@ bool Book::cancel_order(OrderId order_id) {
         return false;
 
     Node *node = it->second;
-
-    if (node->prev)
-        node->prev->next = node->next;
-    if (node->next)
-        node->next->prev = node->prev;
 
     unlink_and_maybe_erase_level(node);
 
