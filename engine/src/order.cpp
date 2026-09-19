@@ -10,4 +10,15 @@ std::string_view to_string(Side side) {
     }
     return "unknown";
 }
+
+std::string_view to_string(OrderType type) {
+    switch (type) {
+    case OrderType::Limit:
+        return "Limit";
+    case OrderType::Market:
+        return "Market";
+    }
+    return "unknown";
+}
+
 }; // namespace engine
