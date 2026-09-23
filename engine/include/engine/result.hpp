@@ -11,6 +11,7 @@ enum class RejectReason {
     InvalidQuantity,
     SelfTrade,
     PoolExhausted,
+    SymbolHalted,
 };
 
 struct OrderResult {

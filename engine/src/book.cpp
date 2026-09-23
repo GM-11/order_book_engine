@@ -101,7 +101,7 @@ bool Book::cancel_stop_order(OrderId order_id) {
     return true;
 }
 
-void Book::check_and_trigger_stops(Price last_trade_price) {
+void Book::check_and_trigger_stops(Price last_trade_price, Timestamp now) {
     std::vector<StopOrder> triggered;
 
     for (auto it = pending_stops_.begin(); it != pending_stops_.end();) {
@@ -119,11 +119,19 @@ void Book::check_and_trigger_stops(Price last_trade_price) {
 
     for (const StopOrder &stop : triggered) {
         add_order({stop.id, stop.owner_id, stop.side, OrderType::Market, 0,
-                   stop.quantity});
+                   stop.quantity},
+                  now);
     }
 }
 
-OrderResult Book::add_order(Order incoming) {
+OrderResult Book::add_order(Order incoming, Timestamp now) {
+    if (halted_) {
+        if (now < halt_until_)
+            return {{}, incoming.quantity, RejectReason::SymbolHalted};
+
+        halted_ = false;
+        outside_band_since_.reset();
+    }
     if (incoming.type == OrderType::Limit && incoming.price <= 0)
         return {{}, incoming.quantity, RejectReason::InvalidPrice};
     if (incoming.quantity <= 0)
@@ -132,7 +140,23 @@ OrderResult Book::add_order(Order incoming) {
     OrderResult result;
     MatchPlan plan = plan_match(incoming);
 
+    bool halted_by_band = false;
+
     for (const ProposedFill &fill : plan.fills) {
+
+        if (!within_band(fill.fill_price)) {
+            if (!outside_band_since_) {
+                outside_band_since_ = now;
+            } else if (now - *outside_band_since_ >= grace_period_ms_) {
+                halted_by_band = true;
+                halted_ = true;
+                halt_until_ = now + halt_duration_ms_;
+                break;
+            }
+        } else {
+            outside_band_since_.reset();
+        }
+
         Trade trade = {next_trade_id_++, fill.fill_price, fill.fill_quantity,
                        incoming.id, fill.passive_node->order.id};
         result.trades.push_back(trade);
@@ -149,8 +173,10 @@ OrderResult Book::add_order(Order incoming) {
             node_pool_.release(node);
         }
     }
-
-    if (plan.halted_by_self_trade) {
+    if (halted_by_band) {
+        result.remaining_quantity = incoming.quantity;
+        result.reject_reason = RejectReason::SymbolHalted;
+    } else if (plan.halted_by_self_trade) {
         result.remaining_quantity = incoming.quantity;
         result.reject_reason = RejectReason::SelfTrade;
     } else if (incoming.quantity > 0 && incoming.type == OrderType::Limit) {
@@ -176,7 +202,7 @@ OrderResult Book::add_order(Order incoming) {
     }
 
     if (!result.trades.empty())
-        check_and_trigger_stops(result.trades.back().price);
+        check_and_trigger_stops(result.trades.back().price, now);
 
     return result;
 }
