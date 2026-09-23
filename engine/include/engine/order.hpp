@@ -11,6 +11,7 @@ using Price = std::int64_t;
 using Quantity = std::int64_t;
 enum class Side { Buy, Sell };
 enum class OrderType { Limit, Market };
+using Timestamp = std::int64_t;
 
 struct Order {
     OrderId id;
