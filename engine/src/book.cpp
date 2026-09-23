@@ -201,9 +201,11 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
         result.reject_reason = RejectReason::None;
     }
 
-    if (!result.trades.empty())
+    if (!result.trades.empty()) {
+        reference_price_ = result.trades.back().price;
+        has_reference_price_ = true;
         check_and_trigger_stops(result.trades.back().price, now);
-
+    }
     return result;
 }
 
