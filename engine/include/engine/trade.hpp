@@ -11,6 +11,10 @@ struct Trade {
     Quantity quantity;
     OrderId aggressor_id;
     OrderId passive_id;
+    OwnerId buy_owner;
+    OwnerId sell_owner;
+    Side aggressor_side;
+    Timestamp ts;
 };
 
 } // namespace engine
