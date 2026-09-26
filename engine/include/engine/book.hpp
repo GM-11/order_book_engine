@@ -28,6 +28,20 @@ struct MatchPlan {
     bool halted_by_self_trade = false;
 };
 
+struct DepthLevel {
+    Price price;
+    Quantity quantity; // sum of all resting orders at this price
+    std::uint32_t order_count;
+};
+
+struct DepthSnapshot {
+    // Last event reflected in this snapshot. A subscriber applies only
+    // events with sequence_number > as_of_seq. 0 = no events yet.
+    SequenceNumber as_of_seq;
+    std::vector<DepthLevel> bids; // best (highest) price first
+    std::vector<DepthLevel> asks; // best (lowest) price first
+};
+
 class Book {
   public:
     explicit Book(std::size_t pool_capacity = 100000,
@@ -47,6 +61,11 @@ class Book {
     bool cancel_order(OrderId order_id, Timestamp now);
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
+    // Top max_levels price levels per side, aggregated. O(max_levels).
+    DepthSnapshot depth(std::size_t max_levels) const;
+    // Slow full audit of the book's internal consistency. For tests and
+    // debugging only, never on the matching path.
+    bool check_invariants() const;
 
     RejectReason place_stop_order(StopOrder stop_order, Timestamp now);
     bool cancel_stop_order(OrderId order_id, Timestamp now);
@@ -69,6 +88,11 @@ class Book {
 
     bool id_in_use(OrderId id) const;
     void remove_resting(Node *node);
+    // A resting order got smaller but stays in the book (partial fill,
+    // in-place modify). Keeps Level::total_quantity equal to the real sum.
+    void reduce_resting(Node *node, Quantity by);
+    template <typename SideMap>
+    void reduce_in_level(SideMap &side_map, Node *node, Quantity by);
     void check_and_trigger_stops(Price low_trade_price, Price high_trade_price,
                                  Timestamp now);
     void unlink_and_maybe_erase_level(Node *node);
