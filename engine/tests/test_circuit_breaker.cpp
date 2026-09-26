@@ -4,42 +4,274 @@
 
 using namespace engine;
 
-TEST_CASE("The first trade has no reference-price band restriction") {
-    Book book{100, 0.10, 10, 50};
-    book.add_order({1, 1, Side::Sell, OrderType::Limit, 1000, 1}, 1);
+TEST_CASE("The first trade establishes the reference price without any band "
+          "restriction") {
+    Book book(100, 0.10, 10, 50);
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 1000, 1}, 0);
 
-    const auto first_trade = book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 2);
+    const auto first_trade =
+        book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
 
     REQUIRE(first_trade.trades.size() == 1);
     CHECK(first_trade.trades[0].price == 1000);
     CHECK(first_trade.reject_reason == RejectReason::None);
 }
 
-TEST_CASE("Current implementation does not establish a reference price or halt") {
-    // Documented implementation gap: Book::add_order never sets reference_price_
-    // or has_reference_price_. Therefore these trades cannot enter the band/grace/
-    // halt state machine, even after the grace interval has elapsed.
-    Book book{100, 0.10, 10, 50};
+TEST_CASE("A trade within the band executes normally and never starts a breach "
+          "clock") {
+    Book book(100, 0.10, 10, 50);
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
+                   0); // reference = 100, band [90,110]
 
-    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 1);
-    REQUIRE(book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 2).trades.size() == 1);
+    book.add_order({3, 3, Side::Sell, OrderType::Limit, 105, 1}, 1);
+    const auto in_band =
+        book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 1);
 
-    book.add_order({3, 3, Side::Sell, OrderType::Limit, 120, 1}, 3);
-    const auto first_breach_candidate =
-        book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 3);
-    REQUIRE(first_breach_candidate.trades.size() == 1);
-    CHECK(first_breach_candidate.reject_reason == RejectReason::None);
+    REQUIRE(in_band.trades.size() == 1);
+    CHECK(in_band.reject_reason == RejectReason::None);
 
-    book.add_order({5, 5, Side::Sell, OrderType::Limit, 120, 1}, 4);
-    const auto after_grace = book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 20);
-    REQUIRE(after_grace.trades.size() == 1);
-    CHECK(after_grace.reject_reason == RejectReason::None);
+    // Prove no clock is running: an immediate breach right after this is still
+    // treated as a first-ever breach and is allowed through, not halted.
+    book.add_order({5, 5, Side::Sell, OrderType::Limit, 200, 1}, 1);
+    const auto breach =
+        book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 1);
+    REQUIRE(breach.trades.size() == 1);
+    CHECK(breach.reject_reason == RejectReason::None);
+}
 
-    // This also documents that the one-call grace-period trap, halt rejection,
-    // recovery, in-band reset, and a stop-on-halt edge cannot currently be
-    // reached through the public API. Do not treat this behavior as a contract.
-    book.add_order({7, 7, Side::Buy, OrderType::Limit, 90, 1}, 21);
-    CHECK(book.cancel_order(7));
-    book.place_stop_order({8, 8, Side::Sell, 80, 1});
-    CHECK(book.cancel_stop_order(8));
+TEST_CASE("A single breach is allowed through immediately and starts the grace "
+          "clock") {
+    Book book(100, 0.10, 10, 50);
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
+                   0); // reference = 100, band [90,110]
+
+    book.add_order({3, 3, Side::Sell, OrderType::Limit, 120, 1},
+                   1); // 120 is outside the band
+    const auto breach =
+        book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 1);
+
+    REQUIRE(breach.trades.size() == 1);
+    CHECK(breach.trades[0].price == 120);
+    CHECK(breach.reject_reason == RejectReason::None);
+}
+
+TEST_CASE("A sustained breach past the grace period halts the symbol") {
+    Book book(100, 0.10, 10, 50); // band 10%, grace 10ms, halt 50ms
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
+                   0); // reference = 100, band [90,110]
+
+    book.add_order({3, 3, Side::Sell, OrderType::Limit, 120, 1}, 1);
+    const auto breach1 =
+        book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 1);
+    REQUIRE(
+        breach1.trades.size() ==
+        1); // first breach passes, starts the clock at t=1, reference -> 120
+
+    // Reference is now 120 (band [108,132]), so this second breach must clear
+    // that shifted band too, not just the original one, to genuinely test the
+    // halt rather than getting swallowed by the reference having moved.
+    book.add_order({5, 5, Side::Sell, OrderType::Limit, 150, 1},
+                   20); // t=20, elapsed since t=1 is 19 >= grace(10)
+    const auto halted =
+        book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 20);
+
+    CHECK(halted.trades.empty());
+    CHECK(halted.remaining_quantity == 1);
+    CHECK(halted.reject_reason == RejectReason::SymbolHalted);
+
+    // The order that tripped the halt never executed, so it's still resting.
+    CHECK(book.best_ask() == 150);
+}
+
+TEST_CASE("While halted, every order is rejected regardless of its own price") {
+    Book book(100, 0.10, 10, 50);
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+
+    book.add_order({3, 3, Side::Sell, OrderType::Limit, 120, 1}, 1);
+    book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1},
+                   1); // starts clock
+
+    book.add_order({5, 5, Side::Sell, OrderType::Limit, 150, 1}, 20);
+    const auto halted = book.add_order(
+        {6, 6, Side::Buy, OrderType::Market, 0, 1}, 20); // trips the halt
+    REQUIRE(halted.reject_reason == RejectReason::SymbolHalted);
+
+    // 121 would be a perfectly ordinary, in-band-looking price -- it still
+    // gets rejected outright because the whole symbol is halted, not just
+    // orders that would themselves breach the band.
+    book.add_order({7, 7, Side::Sell, OrderType::Limit, 121, 1}, 30);
+    const auto during_halt =
+        book.add_order({8, 8, Side::Buy, OrderType::Market, 0, 1}, 30);
+
+    CHECK(during_halt.trades.empty());
+    CHECK(during_halt.remaining_quantity == 1);
+    CHECK(during_halt.reject_reason == RejectReason::SymbolHalted);
+}
+
+TEST_CASE("The halt clears once the cooldown elapses and matching resumes") {
+    Book book(100, 0.10, 10, 50); // halt_duration = 50ms
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+
+    book.add_order({3, 3, Side::Sell, OrderType::Limit, 120, 1}, 1);
+    book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 1);
+
+    book.add_order({5, 5, Side::Sell, OrderType::Limit, 150, 1}, 20);
+    const auto halted =
+        book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 20);
+    REQUIRE(halted.reject_reason ==
+            RejectReason::SymbolHalted); // halt_until_ = 20 + 50 = 70
+
+    // Still inside the cooldown window.
+    book.add_order({7, 7, Side::Sell, OrderType::Limit, 121, 1}, 69);
+    CHECK(book.add_order({8, 8, Side::Buy, OrderType::Market, 0, 1}, 69)
+              .reject_reason == RejectReason::SymbolHalted);
+
+    // At/after halt_until_, the halt lifts and matching resumes normally.
+    // The unmatched breaching order (150) is still resting from before the
+    // halt, so a buy for 121 matches the order placed at t=69 instead --
+    // the reference is still 120 from before the halt, so 121 is in-band.
+    book.add_order({9, 9, Side::Sell, OrderType::Limit, 121, 1}, 70);
+    const auto resumed =
+        book.add_order({10, 10, Side::Buy, OrderType::Market, 0, 1}, 70);
+
+    REQUIRE(resumed.trades.size() == 1);
+    CHECK(resumed.reject_reason == RejectReason::None);
+}
+
+TEST_CASE("An in-band trade between two breaches resets the grace clock") {
+    Book book(100, 0.10, 10, 50);
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
+                   0); // reference = 100, band [90,110]
+
+    book.add_order({3, 3, Side::Sell, OrderType::Limit, 120, 1}, 1);
+    const auto breach1 =
+        book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 1);
+    REQUIRE(breach1.reject_reason ==
+            RejectReason::None); // clock starts at t=1, reference -> 120, band
+                                 // [108,132]
+
+    // In-band relative to the new reference -- this clears outside_band_since_.
+    book.add_order({5, 5, Side::Sell, OrderType::Limit, 125, 1}, 5);
+    const auto in_band =
+        book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 5);
+    REQUIRE(in_band.reject_reason ==
+            RejectReason::None); // reference -> 125, band [112,137]
+
+    // t=30 is 29ms after the ORIGINAL breach at t=1 -- comfortably past the
+    // 10ms grace period if that clock were still running. It isn't: the
+    // in-band trade at t=5 reset it, so this breach is treated as brand new
+    // and is allowed through rather than halting.
+    book.add_order({7, 7, Side::Sell, OrderType::Limit, 200, 1}, 30);
+    const auto fresh_breach =
+        book.add_order({8, 8, Side::Buy, OrderType::Market, 0, 1}, 30);
+
+    REQUIRE(fresh_breach.trades.size() == 1);
+    CHECK(fresh_breach.reject_reason == RejectReason::None);
+}
+
+TEST_CASE("Cancellation is never blocked by an active halt") {
+    Book book(100, 0.10, 10, 50);
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+
+    // A resting order and a dormant stop that the upcoming halt has no reason
+    // to touch (they're on the bid side / far from the trigger price).
+    book.add_order({100, 100, Side::Buy, OrderType::Limit, 95, 1}, 0);
+    book.place_stop_order({200, 200, Side::Sell, 100, 1});
+
+    book.add_order({3, 3, Side::Sell, OrderType::Limit, 120, 1}, 1);
+    book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 1);
+
+    book.add_order({5, 5, Side::Sell, OrderType::Limit, 150, 1}, 20);
+    const auto halted =
+        book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 20);
+    REQUIRE(halted.reject_reason == RejectReason::SymbolHalted);
+
+    // Still well within the halt window (halt_until_ = 70).
+    CHECK(book.cancel_order(100));
+    CHECK(book.cancel_stop_order(200));
+}
+
+TEST_CASE("A stop that can't fire because the symbol is halted stays dormant, "
+          "not lost") {
+    Book book(100, 0.10, 0,
+              50); // grace=0 to force the halt within one add_order call
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
+                   0); // reference = 100, band [90,110]
+
+    book.add_order({10, 100, Side::Sell, OrderType::Limit, 150, 1},
+                   1); // breach level 1
+    book.add_order({11, 101, Side::Sell, OrderType::Limit, 160, 1},
+                   1); // breach level 2
+    book.place_stop_order(
+        {20, 200, Side::Sell, 150, 1}); // fires when last_trade_price <= 150
+
+    const auto sweep =
+        book.add_order({30, 300, Side::Buy, OrderType::Market, 0, 2}, 1);
+
+    REQUIRE(sweep.trades.size() == 1); // only the 150 level executed
+    CHECK(sweep.trades[0].price == 150);
+    CHECK(sweep.remaining_quantity == 1);
+    CHECK(sweep.reject_reason == RejectReason::SymbolHalted);
+
+    // The 160 order never matched -- it's still resting.
+    CHECK(book.best_ask() == 160);
+
+    // The stop must still be cancellable -- proof it was never erased, unlike
+    // the old (buggy) behavior where it vanished the instant the halt engaged.
+    CHECK(book.cancel_stop_order(20));
+}
+
+TEST_CASE("A dormant stop that survived a halt fires normally on the first "
+          "qualifying trade after resumption") {
+    Book book(100, 0.10, 0, 50); // halt_duration = 50ms
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
+                   0); // reference = 100
+
+    book.add_order({10, 100, Side::Sell, OrderType::Limit, 150, 1}, 1);
+    book.add_order({11, 101, Side::Sell, OrderType::Limit, 160, 1}, 1);
+    book.place_stop_order(
+        {20, 200, Side::Sell, 150, 1}); // fires on last_trade_price <= 150
+
+    const auto sweep =
+        book.add_order({30, 300, Side::Buy, OrderType::Market, 0, 2}, 1);
+    REQUIRE(sweep.reject_reason ==
+            RejectReason::SymbolHalted); // halt_until_ = 1 + 50 = 51
+
+    // now = 51 clears the halt as a side effect of this call. Rest TWO bids:
+    // A is what the direct triggering trade below will consume; B is bait
+    // that only gets consumed if the stop actually fires and its resulting
+    // market sell walks the book -- it's the thing that makes this test
+    // falsifiable, unlike checking cancel_stop_order() alone (which reads
+    // false in both the correct case AND the still-buggy case, since either
+    // way the stop is gone by the end -- just for different reasons).
+    const auto bidA =
+        book.add_order({40, 400, Side::Buy, OrderType::Limit, 145, 1}, 51);
+    REQUIRE(bidA.reject_reason ==
+            RejectReason::None); // proves the halt is cleared
+    const auto bidB =
+        book.add_order({42, 402, Side::Buy, OrderType::Limit, 140, 1}, 52);
+    REQUIRE(bidB.reject_reason == RejectReason::None);
+
+    // A crossing sell at 145 consumes bidA directly and prints a trade at
+    // 145, which is <= the stop's 150 trigger -- this is the first
+    // qualifying trade since the halt lifted.
+    const auto cross =
+        book.add_order({43, 403, Side::Sell, OrderType::Limit, 145, 1}, 53);
+    REQUIRE(cross.trades.size() == 1);
+    CHECK(cross.trades[0].price == 145);
+
+    // If the stop survived the halt and fired here, its market sell walks
+    // the book and consumes bidB too -- best_bid() goes empty. If the stop
+    // was lost during the halt (the bug), bidB is never touched and
+    // best_bid() still reports 140.
+    CHECK_FALSE(book.best_bid().has_value());
 }
