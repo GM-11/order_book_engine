@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/event.hpp"
 #include "engine/level.hpp"
 #include "engine/order.hpp"
 #include "engine/pool.hpp"
@@ -12,6 +13,7 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 namespace engine {
 
@@ -42,12 +44,15 @@ class Book {
     OrderResult add_order(Order order, Timestamp now);
     OrderResult modify_order(OrderId order_id, Price new_price,
                              Quantity new_qty, Timestamp now);
-    bool cancel_order(OrderId order_id);
+    bool cancel_order(OrderId order_id, Timestamp now);
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
 
-    void place_stop_order(StopOrder stop_order);
-    bool cancel_stop_order(OrderId order_id);
+    RejectReason place_stop_order(StopOrder stop_order, Timestamp now);
+    bool cancel_stop_order(OrderId order_id, Timestamp now);
+    std::vector<EngineEvent> drain_events() {
+        return std::exchange(events_, {});
+    }
 
     bool within_band(Price p) const {
         if (!has_reference_price_)
@@ -61,7 +66,8 @@ class Book {
     RejectReason validate_order_fields(const Order &order) const;
     RejectReason validate_new_order(const Order &order, Timestamp now);
     MatchPlan plan_match(const Order &incoming) const;
-    void check_and_trigger_stops(Price last_trade_price, Timestamp now);
+    void check_and_trigger_stops(Price low_trade_price, Price high_trade_price,
+                                 Timestamp now);
     void unlink_and_maybe_erase_level(Node *node);
     template <typename SideMap>
     void unlink_and_maybe_erase_from_level(SideMap &side_map, Node *node);
@@ -74,6 +80,12 @@ class Book {
     std::vector<StopOrder> pending_stops_;
     NodePool node_pool_;
     TradeId next_trade_id_;
+    std::vector<EngineEvent> events_;
+    SequenceNumber next_seq_ = 1;
+    void emit(EngineEvent e) {
+        e.sequence_number = next_seq_++;
+        events_.push_back(e);
+    }
 
     // reference_price_ * (10000 +/- band_bps_) must fit in int64_t.
     static_assert(sizeof(Price) >= sizeof(std::int64_t));
