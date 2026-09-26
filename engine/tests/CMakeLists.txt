@@ -18,6 +18,7 @@ add_executable(engine_tests
     test_events.cpp
     test_order_ids.cpp
     test_pool.cpp
+    test_depth.cpp
 )
 target_link_libraries(engine_tests PRIVATE engine Catch2::Catch2WithMain)
 target_compile_features(engine_tests PRIVATE cxx_std_20)
