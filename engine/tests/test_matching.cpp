@@ -8,7 +8,7 @@ TEST_CASE("A non-crossing limit order rests and updates the best bid") {
     Book book;
     const auto result = book.add_order({1, 10, Side::Buy, OrderType::Limit, 100, 5}, 1);
 
-    CHECK(result.remaining_quantity == 0);
+    CHECK(result.unaccepted_quantity == 0);
     CHECK(result.reject_reason == RejectReason::None);
     CHECK(result.trades.empty());
     CHECK(book.best_bid() == 100);
@@ -26,7 +26,7 @@ TEST_CASE("A crossing limit order executes at the passive price and removes it")
     CHECK(result.trades[0].quantity == 5);
     CHECK(result.trades[0].aggressor_id == 2);
     CHECK(result.trades[0].passive_id == 1);
-    CHECK(result.remaining_quantity == 0);
+    CHECK(result.unaccepted_quantity == 0);
     CHECK(result.reject_reason == RejectReason::None);
     CHECK_FALSE(book.best_ask().has_value());
 }
@@ -78,7 +78,7 @@ TEST_CASE("A market order consumes liquidity without resting its excess") {
     REQUIRE(result.trades.size() == 2);
     CHECK(result.trades[0].quantity == 2);
     CHECK(result.trades[1].quantity == 3);
-    CHECK(result.remaining_quantity == 0);
+    CHECK(result.unaccepted_quantity == 0);
     CHECK(result.reject_reason == RejectReason::None);
     CHECK_FALSE(book.best_ask().has_value());
     CHECK_FALSE(book.best_bid().has_value());
@@ -95,4 +95,18 @@ TEST_CASE("Invalid limit prices and quantities are rejected before matching") {
           RejectReason::InvalidQuantity);
     CHECK(book.add_order({4, 1, Side::Buy, OrderType::Market, 0, -1}, 4).reject_reason ==
           RejectReason::InvalidQuantity);
+}
+
+TEST_CASE("A partially filled limit order reports no remaining quantity after resting") {
+    Book book;
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 2}, 0);
+
+    const auto result =
+        book.add_order({2, 2, Side::Buy, OrderType::Limit, 100, 5}, 1);
+
+    REQUIRE(result.trades.size() == 1);
+    CHECK(result.trades[0].quantity == 2);
+    CHECK(result.unaccepted_quantity == 0);
+    CHECK(result.reject_reason == RejectReason::None);
+    CHECK(book.best_bid() == 100);
 }

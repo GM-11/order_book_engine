@@ -44,7 +44,7 @@ TEST_CASE("A full node pool rejects a new resting order without partial applicat
 
     const auto exhausted = book.add_order({3, 3, Side::Buy, OrderType::Limit, 98, 7}, 3);
     CHECK(exhausted.reject_reason == RejectReason::PoolExhausted);
-    CHECK(exhausted.remaining_quantity == 7);
+    CHECK(exhausted.unaccepted_quantity == 7);
     CHECK(book.best_bid() == 100);
     CHECK(book.cancel_order(3) == false);
 }

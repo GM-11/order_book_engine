@@ -14,6 +14,7 @@ add_executable(engine_tests
     test_stops.cpp
     test_circuit_breaker.cpp
     test_cancel_and_queries.cpp
+    test_modify.cpp
 )
 target_link_libraries(engine_tests PRIVATE engine Catch2::Catch2WithMain)
 target_compile_features(engine_tests PRIVATE cxx_std_20)

@@ -10,7 +10,7 @@ TEST_CASE("Cancel Newest preserves resting self liquidity and its queue position
 
     const auto rejected = book.add_order({2, 7, Side::Buy, OrderType::Limit, 100, 5}, 2);
     CHECK(rejected.trades.empty());
-    CHECK(rejected.remaining_quantity == 5);
+    CHECK(rejected.unaccepted_quantity == 5);
     CHECK(rejected.reject_reason == RejectReason::SelfTrade);
     CHECK(book.best_ask() == 100);
 
@@ -30,7 +30,7 @@ TEST_CASE("Trades before a self-trade are retained and only the remainder is rej
     REQUIRE(result.trades.size() == 1);
     CHECK(result.trades[0].passive_id == 1);
     CHECK(result.trades[0].quantity == 2);
-    CHECK(result.remaining_quantity == 4);
+    CHECK(result.unaccepted_quantity == 4);
     CHECK(result.reject_reason == RejectReason::SelfTrade);
 
     const auto later = book.add_order({4, 9, Side::Buy, OrderType::Limit, 100, 5}, 4);
