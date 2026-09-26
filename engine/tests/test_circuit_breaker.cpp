@@ -4,9 +4,18 @@
 
 using namespace engine;
 
+namespace {
+void expect_not_crossed(const Book &book) {
+    const auto bid = book.best_bid();
+    const auto ask = book.best_ask();
+    if (bid && ask)
+        CHECK(*bid < *ask);
+}
+} // namespace
+
 TEST_CASE("The first trade establishes the reference price without any band "
           "restriction") {
-    Book book(100, 0.10, 10, 50);
+    Book book(100, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 1000, 1}, 0);
 
     const auto first_trade =
@@ -15,11 +24,12 @@ TEST_CASE("The first trade establishes the reference price without any band "
     REQUIRE(first_trade.trades.size() == 1);
     CHECK(first_trade.trades[0].price == 1000);
     CHECK(first_trade.reject_reason == RejectReason::None);
+    expect_not_crossed(book);
 }
 
 TEST_CASE("A trade within the band executes normally and never starts a breach "
           "clock") {
-    Book book(100, 0.10, 10, 50);
+    Book book(100, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
                    0); // reference = 100, band [90,110]
@@ -38,11 +48,12 @@ TEST_CASE("A trade within the band executes normally and never starts a breach "
         book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 1);
     REQUIRE(breach.trades.size() == 1);
     CHECK(breach.reject_reason == RejectReason::None);
+    expect_not_crossed(book);
 }
 
 TEST_CASE("A single breach is allowed through immediately and starts the grace "
           "clock") {
-    Book book(100, 0.10, 10, 50);
+    Book book(100, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
                    0); // reference = 100, band [90,110]
@@ -55,10 +66,11 @@ TEST_CASE("A single breach is allowed through immediately and starts the grace "
     REQUIRE(breach.trades.size() == 1);
     CHECK(breach.trades[0].price == 120);
     CHECK(breach.reject_reason == RejectReason::None);
+    expect_not_crossed(book);
 }
 
 TEST_CASE("A sustained breach past the grace period halts the symbol") {
-    Book book(100, 0.10, 10, 50); // band 10%, grace 10ms, halt 50ms
+    Book book(100, 1000, 10, 50); // band 10%, grace 10ms, halt 50ms
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
                    0); // reference = 100, band [90,110]
@@ -79,15 +91,16 @@ TEST_CASE("A sustained breach past the grace period halts the symbol") {
         book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 20);
 
     CHECK(halted.trades.empty());
-    CHECK(halted.remaining_quantity == 1);
+    CHECK(halted.unaccepted_quantity == 1);
     CHECK(halted.reject_reason == RejectReason::SymbolHalted);
 
     // The order that tripped the halt never executed, so it's still resting.
     CHECK(book.best_ask() == 150);
+    expect_not_crossed(book);
 }
 
 TEST_CASE("While halted, every order is rejected regardless of its own price") {
-    Book book(100, 0.10, 10, 50);
+    Book book(100, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
 
@@ -108,12 +121,13 @@ TEST_CASE("While halted, every order is rejected regardless of its own price") {
         book.add_order({8, 8, Side::Buy, OrderType::Market, 0, 1}, 30);
 
     CHECK(during_halt.trades.empty());
-    CHECK(during_halt.remaining_quantity == 1);
+    CHECK(during_halt.unaccepted_quantity == 1);
     CHECK(during_halt.reject_reason == RejectReason::SymbolHalted);
+    expect_not_crossed(book);
 }
 
 TEST_CASE("The halt clears once the cooldown elapses and matching resumes") {
-    Book book(100, 0.10, 10, 50); // halt_duration = 50ms
+    Book book(100, 1000, 10, 50); // halt_duration = 50ms
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
 
@@ -141,10 +155,11 @@ TEST_CASE("The halt clears once the cooldown elapses and matching resumes") {
 
     REQUIRE(resumed.trades.size() == 1);
     CHECK(resumed.reject_reason == RejectReason::None);
+    expect_not_crossed(book);
 }
 
 TEST_CASE("An in-band trade between two breaches resets the grace clock") {
-    Book book(100, 0.10, 10, 50);
+    Book book(100, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
                    0); // reference = 100, band [90,110]
@@ -173,10 +188,11 @@ TEST_CASE("An in-band trade between two breaches resets the grace clock") {
 
     REQUIRE(fresh_breach.trades.size() == 1);
     CHECK(fresh_breach.reject_reason == RejectReason::None);
+    expect_not_crossed(book);
 }
 
 TEST_CASE("Cancellation is never blocked by an active halt") {
-    Book book(100, 0.10, 10, 50);
+    Book book(100, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
 
@@ -196,11 +212,12 @@ TEST_CASE("Cancellation is never blocked by an active halt") {
     // Still well within the halt window (halt_until_ = 70).
     CHECK(book.cancel_order(100));
     CHECK(book.cancel_stop_order(200));
+    expect_not_crossed(book);
 }
 
 TEST_CASE("A stop that can't fire because the symbol is halted stays dormant, "
           "not lost") {
-    Book book(100, 0.10, 0,
+    Book book(100, 1000, 0,
               50); // grace=0 to force the halt within one add_order call
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
@@ -218,7 +235,7 @@ TEST_CASE("A stop that can't fire because the symbol is halted stays dormant, "
 
     REQUIRE(sweep.trades.size() == 1); // only the 150 level executed
     CHECK(sweep.trades[0].price == 150);
-    CHECK(sweep.remaining_quantity == 1);
+    CHECK(sweep.unaccepted_quantity == 1);
     CHECK(sweep.reject_reason == RejectReason::SymbolHalted);
 
     // The 160 order never matched -- it's still resting.
@@ -227,11 +244,12 @@ TEST_CASE("A stop that can't fire because the symbol is halted stays dormant, "
     // The stop must still be cancellable -- proof it was never erased, unlike
     // the old (buggy) behavior where it vanished the instant the halt engaged.
     CHECK(book.cancel_stop_order(20));
+    expect_not_crossed(book);
 }
 
 TEST_CASE("A dormant stop that survived a halt fires normally on the first "
           "qualifying trade after resumption") {
-    Book book(100, 0.10, 0, 50); // halt_duration = 50ms
+    Book book(100, 1000, 0, 50); // halt_duration = 50ms
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1},
                    0); // reference = 100
@@ -274,4 +292,56 @@ TEST_CASE("A dormant stop that survived a halt fires normally on the first "
     // was lost during the halt (the bug), bidB is never touched and
     // best_bid() still reports 140.
     CHECK_FALSE(book.best_bid().has_value());
+    expect_not_crossed(book);
+}
+
+TEST_CASE("An exact integer upper band edge is in-band") {
+    Book book(100, 1500, 0, 50); // reference 100, band [85, 115]
+    book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
+    REQUIRE(book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0)
+                .trades.size() == 1);
+
+    book.add_order({3, 3, Side::Sell, OrderType::Limit, 115, 1}, 1);
+    const auto at_upper =
+        book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 1);
+    REQUIRE(at_upper.trades.size() == 1);
+    CHECK(at_upper.reject_reason == RejectReason::None);
+
+    // If 115 were misclassified as outside (as a double-floor bug can do),
+    // this second trade at grace=0 would trip the halt instead of executing.
+    book.add_order({5, 5, Side::Sell, OrderType::Limit, 130, 1}, 1);
+    const auto first_breach =
+        book.add_order({6, 6, Side::Buy, OrderType::Market, 0, 1}, 1);
+    REQUIRE(first_breach.trades.size() == 1);
+    CHECK(first_breach.reject_reason == RejectReason::None);
+    expect_not_crossed(book);
+}
+
+TEST_CASE("Book rejects invalid basis-point bands") {
+    CHECK_THROWS_AS(Book(1, 0), std::invalid_argument);
+    CHECK_THROWS_AS(Book(1, 10000), std::invalid_argument);
+}
+
+TEST_CASE("Integer band limits agree with exact rational arithmetic") {
+    constexpr std::int64_t bps_values[] = {1, 10, 333, 1500, 9999};
+    for (const auto bps : bps_values) {
+        for (Price reference = 1; reference <= 5000; ++reference) {
+            Book book(1, bps);
+            book.add_order({1, 1, Side::Sell, OrderType::Limit, reference, 1},
+                           0);
+            REQUIRE(
+                book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0)
+                    .trades.size() == 1);
+
+            const Price expected_lower =
+                (reference * (10000 - bps) + 9999) / 10000;
+            const Price expected_upper = reference * (10000 + bps) / 10000;
+            CHECK(book.within_band(expected_lower));
+            CHECK(book.within_band(expected_upper));
+            if (expected_lower > 0)
+                CHECK_FALSE(book.within_band(expected_lower - 1));
+            CHECK_FALSE(book.within_band(expected_upper + 1));
+            expect_not_crossed(book);
+        }
+    }
 }
