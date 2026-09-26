@@ -89,8 +89,7 @@ RejectReason Book::validate_new_order(const Order &order, Timestamp now) {
 
         halted_ = false;
         outside_band_since_.reset();
-        emit({0, EventKind::Resumed, now, order.id, 0, order.owner_id, 0,
-              order.side, order.price, order.quantity});
+        emit({0, EventKind::Resumed, now, 0, 0, 0, 0, Side::Buy, 0, 0});
     }
     return validate_order_fields(order);
 }
