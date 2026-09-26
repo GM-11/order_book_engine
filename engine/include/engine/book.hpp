@@ -5,9 +5,12 @@
 #include "engine/pool.hpp"
 #include "engine/result.hpp"
 #include "engine/trade.hpp"
+
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 namespace engine {
@@ -26,14 +29,19 @@ struct MatchPlan {
 class Book {
   public:
     explicit Book(std::size_t pool_capacity = 100000,
-                  double band_percentage = 0.10,
+                  std::int64_t band_bps = 1000,
                   Timestamp grace_period_ms = 2000,
                   Timestamp halt_duratio_ms = 30000)
-        : node_pool_(pool_capacity), next_trade_id_(1),
-          band_percentage_(band_percentage), grace_period_ms_(grace_period_ms),
-          halt_duration_ms_(halt_duratio_ms) {}
+        : node_pool_(pool_capacity), next_trade_id_(1), band_bps_(band_bps),
+          grace_period_ms_(grace_period_ms),
+          halt_duration_ms_(halt_duratio_ms) {
+        if (band_bps_ <= 0 || band_bps_ >= 10000)
+            throw std::invalid_argument("band_bps must be in (0, 10000)");
+    }
 
     OrderResult add_order(Order order, Timestamp now);
+    OrderResult modify_order(OrderId order_id, Price new_price,
+                             Quantity new_qty, Timestamp now);
     bool cancel_order(OrderId order_id);
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
@@ -44,14 +52,14 @@ class Book {
     bool within_band(Price p) const {
         if (!has_reference_price_)
             return true; // nothing traded yet, nothing to compare against
-        Price band_low =
-            static_cast<Price>(reference_price_ * (1.0 - band_percentage_));
-        Price band_high =
-            static_cast<Price>(reference_price_ * (1.0 + band_percentage_));
-        return p >= band_low && p <= band_high;
+        return p >= lower_band_price() && p <= upper_band_price();
     }
 
   private:
+    Price lower_band_price() const;
+    Price upper_band_price() const;
+    RejectReason validate_order_fields(const Order &order) const;
+    RejectReason validate_new_order(const Order &order, Timestamp now);
     MatchPlan plan_match(const Order &incoming) const;
     void check_and_trigger_stops(Price last_trade_price, Timestamp now);
     void unlink_and_maybe_erase_level(Node *node);
@@ -67,7 +75,9 @@ class Book {
     NodePool node_pool_;
     TradeId next_trade_id_;
 
-    double band_percentage_;
+    // reference_price_ * (10000 +/- band_bps_) must fit in int64_t.
+    static_assert(sizeof(Price) >= sizeof(std::int64_t));
+    std::int64_t band_bps_;
     Timestamp grace_period_ms_;
     Timestamp halt_duration_ms_;
     Price reference_price_ = 0;
