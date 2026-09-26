@@ -33,10 +33,10 @@ class Book {
     explicit Book(std::size_t pool_capacity = 100000,
                   std::int64_t band_bps = 1000,
                   Timestamp grace_period_ms = 2000,
-                  Timestamp halt_duratio_ms = 30000)
+                  Timestamp halt_duration_ms = 30000)
         : node_pool_(pool_capacity), next_trade_id_(1), band_bps_(band_bps),
           grace_period_ms_(grace_period_ms),
-          halt_duration_ms_(halt_duratio_ms) {
+          halt_duration_ms_(halt_duration_ms) {
         if (band_bps_ <= 0 || band_bps_ >= 10000)
             throw std::invalid_argument("band_bps must be in (0, 10000)");
     }
@@ -66,6 +66,9 @@ class Book {
     RejectReason validate_order_fields(const Order &order) const;
     RejectReason validate_new_order(const Order &order, Timestamp now);
     MatchPlan plan_match(const Order &incoming) const;
+
+    bool id_in_use(OrderId id) const;
+    void remove_resting(Node *node);
     void check_and_trigger_stops(Price low_trade_price, Price high_trade_price,
                                  Timestamp now);
     void unlink_and_maybe_erase_level(Node *node);
