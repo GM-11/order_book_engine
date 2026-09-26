@@ -2,6 +2,8 @@
 
 #include "engine/book.hpp"
 
+#include <algorithm>
+
 using namespace engine;
 
 TEST_CASE("Stop sells and buys fire inclusively and submit market orders") {
@@ -78,4 +80,45 @@ TEST_CASE("Stop cancellation does not consume resting-order pool capacity") {
     const auto replacement = book.add_order({3, 13, Side::Buy, OrderType::Limit, 90, 1}, 2);
     CHECK(replacement.reject_reason == RejectReason::None);
     CHECK(book.best_bid() == 90);
+}
+
+// Policy pin (see README): a stop that triggers in the same call that trips
+// the halt goes back to dormant. After the halt it is re-evaluated against
+// post-halt trades like any other stop, so it may not fire if the market
+// reopens on the other side of its stop price.
+TEST_CASE("A stop put back by a halt is re-evaluated against post-halt trades") {
+    Book book(100, 1000, 0, 30000); // grace 0: second breach in a walk halts
+    book.add_order({1, 1, Side::Buy, OrderType::Limit, 100, 1}, 1);
+    book.add_order({2, 2, Side::Sell, OrderType::Limit, 100, 1}, 1);
+    book.add_order({3, 3, Side::Buy, OrderType::Limit, 99, 1}, 2);
+    book.add_order({4, 4, Side::Buy, OrderType::Limit, 80, 1}, 2);
+    book.add_order({5, 5, Side::Buy, OrderType::Limit, 70, 5}, 2);
+    REQUIRE(book.place_stop_order({10, 10, Side::Sell, 99, 3}, 2) ==
+            RejectReason::None);
+    REQUIRE(book.place_stop_order({11, 11, Side::Sell, 99, 1}, 2) ==
+            RejectReason::None);
+
+    // Trade at 99 triggers both; stop 10 walks out of band and halts.
+    book.add_order({6, 6, Side::Sell, OrderType::Limit, 99, 1}, 10);
+    book.drain_events();
+
+    const auto fired = [](const std::vector<EngineEvent> &events, OrderId id) {
+        return std::any_of(events.begin(), events.end(), [id](const EngineEvent &e) {
+            return e.kind == EventKind::StopTriggered && e.order_id == id;
+        });
+    };
+
+    // Reopen with a trade at 100, above the sell stop: it stays dormant.
+    book.add_order({20, 20, Side::Sell, OrderType::Limit, 100, 1}, 40000);
+    book.add_order({21, 21, Side::Buy, OrderType::Limit, 100, 1}, 40001);
+    CHECK_FALSE(fired(book.drain_events(), 11));
+
+    // A post-halt trade at 99 fires it.
+    book.add_order({22, 22, Side::Buy, OrderType::Limit, 99, 1}, 40002);
+    book.add_order({23, 23, Side::Sell, OrderType::Limit, 99, 1}, 40003);
+    const auto events = book.drain_events();
+    CHECK(fired(events, 11));
+    CHECK(std::any_of(events.begin(), events.end(), [](const EngineEvent &e) {
+        return e.kind == EventKind::Trade && e.order_id == 11;
+    }));
 }
