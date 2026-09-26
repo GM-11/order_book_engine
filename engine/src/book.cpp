@@ -125,7 +125,7 @@ OrderResult Book::modify_order(OrderId order_id, Price new_price,
         const RejectReason invalid = validate_order_fields(replacement);
         if (invalid != RejectReason::None)
             return {{}, new_qty, invalid};
-        node->order.quantity = new_qty;
+        reduce_resting(node, node->order.quantity - new_qty);
         emit({0, EventKind::Modified, now, node->order.id, 0,
               node->order.owner_id, 0, node->order.side, node->order.price,
               node->order.quantity});
@@ -192,7 +192,7 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
               trade.buy_owner, trade.sell_owner, trade.aggressor_side,
               trade.price, trade.quantity});
 
-        fill.passive_node->order.quantity -= fill.fill_quantity;
+        reduce_resting(fill.passive_node, fill.fill_quantity);
         incoming.quantity -= fill.fill_quantity;
 
         if (fill.passive_node->order.is_fully_filled())
