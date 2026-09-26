@@ -1,4 +1,4 @@
-add_library(engine STATIC src/order.cpp src/book.cpp)
+add_library(engine STATIC src/order.cpp src/book.cpp src/utils.cpp)
 
 target_include_directories(engine PUBLIC include PRIVATE src)
 
