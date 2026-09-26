@@ -97,13 +97,14 @@ struct OrderResult {
 };
 ```
 
-`RejectReason` can be `None`, `InvalidPrice`, `InvalidQuantity`, `SelfTrade`, or `PoolExhausted`.
+`RejectReason` can be `None`, `InvalidPrice`, `InvalidQuantity`, `SelfTrade`, `PoolExhausted`, `SymbolHalted`, `UnknownOrder`, or `DuplicateOrderId`.
 
 - A limit price must be positive.
 - Quantity must be positive.
 - A limit order that cannot be stored because the pool is exhausted returns `PoolExhausted`.
+- An order or stop whose id belongs to a live resting order or a dormant stop is rejected with `DuplicateOrderId` before matching. Ids are checked against live orders only; a filled or cancelled id can be reused. (Long term the gateway should assign engine ids and keep the client's own id separately.)
 - If self-trade prevention stops matching, already-executed trades are retained and the unmatched amount is returned with `SelfTrade`.
-- On the normal accepted path, `unaccepted_quantity` is `0`; any unfilled limit quantity has been placed on the book. Market-order liquidity that is unavailable is discarded.
+- On the normal accepted path for a limit order, `unaccepted_quantity` is `0`; any unfilled quantity has been placed on the book. For a market order, quantity with no liquidity left is cancelled and reported in `unaccepted_quantity` (with `RejectReason::None`, since cancelling the rest is not a rejection).
 
 ## Self-trade prevention
 
@@ -123,11 +124,21 @@ book.place_stop_order({
 }, 0);
 ```
 
-- A stop-sell triggers when `last_trade_price <= stop_price`.
-- A stop-buy triggers when `last_trade_price >= stop_price`.
+- A stop-sell triggers when the lowest price traded in a match `<= stop_price`.
+- A stop-buy triggers when the highest price traded in a match `>= stop_price`.
+  (A single sweep can trade through several prices; a stop fires if any of them touches it.)
 - Trigger checks occur only after a real trade.
 - Triggered stops are removed from the dormant list before their market orders are submitted. This prevents duplicate triggering and makes recursive cascades safe.
 - `cancel_stop_order(order_id, now)` cancels a dormant stop; `cancel_order(order_id, now)` cancels a resting limit order.
+- While the symbol is halted, stops are not checked. If a batch of triggered stops trips the halt part-way through, the stops that had not fired yet go back to the front of the dormant list. After the halt they are re-evaluated against post-halt trades like any other stop, so a stop can stay dormant if the market reopens on the other side of its stop price. This is a deliberate policy, pinned by a test; revisit it with the reopening auction.
+
+## Event stream
+
+`drain_events()` returns every state change since the last drain, each with a per-book `sequence_number` (1, 2, 3... with no gaps). `OrderResult` is the private reply to the sender; the event stream is the public record for the ledger, market data and replay.
+
+- Every `Accepted` ends in exactly one outcome: filled by its own trades, `Rested`, or `Cancelled`.
+- A price change or size increase via `modify_order` emits `Replaced` (carrying the price and quantity that left the book), then `Accepted` for the new version. `Replaced` is not terminal; only `Cancelled` is.
+- `Halted` and `Resumed` are symbol-level. `Resumed` carries no order fields.
 
 ## Book queries
 
