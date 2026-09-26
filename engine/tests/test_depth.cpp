@@ -104,12 +104,11 @@ TEST_CASE("Depth respects max_levels and handles an empty book") {
     const auto empty = book.depth(5);
     CHECK(empty.bids.empty());
     CHECK(empty.asks.empty());
-    CHECK(empty.as_of_seq == 0);
+    CHECK(empty.as_of_sequence == 0);
 
     for (Price p = 90; p < 100; ++p)
-        book.add_order({static_cast<OrderId>(p), 1, Side::Buy,
-                        OrderType::Limit, p, 1},
-                       1);
+        book.add_order(
+            {static_cast<OrderId>(p), 1, Side::Buy, OrderType::Limit, p, 1}, 1);
     const auto d = book.depth(3);
     REQUIRE(d.bids.size() == 3);
     CHECK(d.bids[0].price == 99);
@@ -117,7 +116,7 @@ TEST_CASE("Depth respects max_levels and handles an empty book") {
     CHECK(book.depth(0).bids.empty());
 }
 
-TEST_CASE("Snapshot as_of_seq matches the last emitted event") {
+TEST_CASE("Snapshot as_of_sequence matches the last emitted event") {
     Book book;
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 100, 5}, 1);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 100, 2}, 2);
@@ -125,13 +124,13 @@ TEST_CASE("Snapshot as_of_seq matches the last emitted event") {
     REQUIRE_FALSE(events.empty());
 
     const auto snap = book.depth(10);
-    CHECK(snap.as_of_seq == events.back().sequence_number);
+    CHECK(snap.as_of_sequence == events.back().sequence_number);
 
     // A later event must have a higher number than the snapshot.
     book.cancel_order(1, 3);
     const auto later = book.drain_events();
     REQUIRE(later.size() == 1);
-    CHECK(later[0].sequence_number == snap.as_of_seq + 1);
+    CHECK(later[0].sequence_number == snap.as_of_sequence + 1);
 }
 
 // Randomized stress: thousands of mixed operations, auditing the whole book

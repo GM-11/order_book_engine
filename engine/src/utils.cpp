@@ -122,7 +122,7 @@ void Book::reduce_resting(Node *node, Quantity by) {
 
 DepthSnapshot Book::depth(std::size_t max_levels) const {
     DepthSnapshot snap;
-    snap.as_of_seq = next_seq_ - 1;
+    snap.as_of_sequence = next_seq_ - 1;
 
     auto collect = [max_levels](const auto &side_map,
                                 std::vector<DepthLevel> &out) {

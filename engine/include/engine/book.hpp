@@ -36,8 +36,8 @@ struct DepthLevel {
 
 struct DepthSnapshot {
     // Last event reflected in this snapshot. A subscriber applies only
-    // events with sequence_number > as_of_seq. 0 = no events yet.
-    SequenceNumber as_of_seq;
+    // events with sequence_number > as_of_sequence. 0 = no events yet.
+    SequenceNumber as_of_sequence;
     std::vector<DepthLevel> bids; // best (highest) price first
     std::vector<DepthLevel> asks; // best (lowest) price first
 };
