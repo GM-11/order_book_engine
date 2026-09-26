@@ -14,6 +14,7 @@ enum class RejectReason {
     PoolExhausted,
     SymbolHalted,
     UnknownOrder,
+    DuplicateOrderId,
 };
 
 struct OrderResult {

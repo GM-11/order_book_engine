@@ -11,6 +11,7 @@ enum class EventKind {
     Trade,
     Cancelled,
     Modified,
+    Replaced,
     StopAccepted,
     StopTriggered,
     StopCancelled,
