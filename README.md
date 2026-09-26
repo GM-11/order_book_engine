@@ -120,14 +120,14 @@ book.place_stop_order({
     engine::Side::Sell,
     9900,                // stop price
     5
-});
+}, 0);
 ```
 
 - A stop-sell triggers when `last_trade_price <= stop_price`.
 - A stop-buy triggers when `last_trade_price >= stop_price`.
 - Trigger checks occur only after a real trade.
 - Triggered stops are removed from the dormant list before their market orders are submitted. This prevents duplicate triggering and makes recursive cascades safe.
-- `cancel_stop_order(order_id)` cancels a dormant stop; `cancel_order(order_id)` cancels a resting limit order.
+- `cancel_stop_order(order_id, now)` cancels a dormant stop; `cancel_order(order_id, now)` cancels a resting limit order.
 
 ## Book queries
 
