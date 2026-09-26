@@ -53,6 +53,9 @@ RejectReason Book::place_stop_order(StopOrder stop, Timestamp now) {
     if (stop.stop_price <= 0)
         return RejectReason::InvalidPrice;
 
+    if (id_in_use(stop.id))
+        return RejectReason::DuplicateOrderId;
+
     pending_stops_.push_back(stop);
     emit({0, EventKind::StopAccepted, now, stop.id, 0, stop.owner_id, 0,
           stop.side, stop.stop_price, stop.quantity});
@@ -133,7 +136,9 @@ OrderResult Book::modify_order(OrderId order_id, Price new_price,
     if (invalid != RejectReason::None)
         return {{}, new_qty, invalid};
 
-    cancel_order(order_id, now);
+    emit({0, EventKind::Replaced, now, node->order.id, 0, node->order.owner_id,
+          0, node->order.side, node->order.price, node->order.quantity});
+    remove_resting(node);
     return add_order(replacement, now);
 }
 
@@ -141,6 +146,9 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
     const RejectReason invalid = validate_new_order(incoming, now);
     if (invalid != RejectReason::None)
         return {{}, incoming.quantity, invalid};
+
+    if (id_in_use(incoming.id))
+        return {{}, incoming.quantity, RejectReason::DuplicateOrderId};
 
     emit({0, EventKind::Accepted, now, incoming.id, 0, incoming.owner_id, 0,
           incoming.side, incoming.price, incoming.quantity});
@@ -187,14 +195,8 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
         fill.passive_node->order.quantity -= fill.fill_quantity;
         incoming.quantity -= fill.fill_quantity;
 
-        if (fill.passive_node->order.is_fully_filled()) {
-            Node *node = fill.passive_node;
-            OrderId passive_id = node->order.id;
-
-            unlink_and_maybe_erase_level(node);
-            id_index_.erase(passive_id);
-            node_pool_.release(node);
-        }
+        if (fill.passive_node->order.is_fully_filled())
+            remove_resting(fill.passive_node);
     }
     if (halted_by_band) {
         if (incoming.type == OrderType::Limit) {
@@ -258,6 +260,10 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
         if (node == nullptr) {
             result.unaccepted_quantity = incoming.quantity;
             result.reject_reason = RejectReason::PoolExhausted;
+            // The order was Accepted; it must still reach a terminal event.
+            emit({0, EventKind::Cancelled, now, incoming.id, 0,
+                  incoming.owner_id, 0, incoming.side, incoming.price,
+                  incoming.quantity});
         } else {
             node->order = incoming;
 
@@ -299,15 +305,22 @@ bool Book::cancel_order(OrderId order_id, Timestamp now) {
         return false;
 
     Node *node = it->second;
-
-    unlink_and_maybe_erase_level(node);
-
     emit({0, EventKind::Cancelled, now, node->order.id, 0, node->order.owner_id,
           0, node->order.side, node->order.price, node->order.quantity});
-    id_index_.erase(order_id);
-    node_pool_.release(node);
-
+    remove_resting(node);
     return true;
+}
+
+bool Book::id_in_use(OrderId id) const {
+    return id_index_.contains(id) ||
+           std::any_of(pending_stops_.begin(), pending_stops_.end(),
+                       [id](const StopOrder &s) { return s.id == id; });
+}
+
+void Book::remove_resting(Node *node) {
+    unlink_and_maybe_erase_level(node);
+    id_index_.erase(node->order.id);
+    node_pool_.release(node);
 }
 
 } // namespace engine
