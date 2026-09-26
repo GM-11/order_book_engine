@@ -127,18 +127,66 @@ void Book::check_and_trigger_stops(Price last_trade_price, Timestamp now) {
     }
 }
 
-OrderResult Book::add_order(Order incoming, Timestamp now) {
+Price Book::lower_band_price() const {
+    const std::int64_t product = reference_price_ * (10000 - band_bps_);
+    return (product + 9999) / 10000;
+}
+
+Price Book::upper_band_price() const {
+    const std::int64_t product = reference_price_ * (10000 + band_bps_);
+    return product / 10000;
+}
+
+RejectReason Book::validate_order_fields(const Order &order) const {
+    if (order.type == OrderType::Limit && order.price <= 0)
+        return RejectReason::InvalidPrice;
+    if (order.quantity <= 0)
+        return RejectReason::InvalidQuantity;
+    return RejectReason::None;
+}
+
+RejectReason Book::validate_new_order(const Order &order, Timestamp now) {
     if (halted_) {
         if (now < halt_until_)
-            return {{}, incoming.quantity, RejectReason::SymbolHalted};
+            return RejectReason::SymbolHalted;
 
         halted_ = false;
         outside_band_since_.reset();
     }
-    if (incoming.type == OrderType::Limit && incoming.price <= 0)
-        return {{}, incoming.quantity, RejectReason::InvalidPrice};
-    if (incoming.quantity <= 0)
-        return {{}, incoming.quantity, RejectReason::InvalidQuantity};
+    return validate_order_fields(order);
+}
+
+OrderResult Book::modify_order(OrderId order_id, Price new_price,
+                               Quantity new_qty, Timestamp now) {
+    const auto it = id_index_.find(order_id);
+    if (it == id_index_.end())
+        return {{}, new_qty, RejectReason::UnknownOrder};
+
+    Node *node = it->second;
+    Order replacement = node->order;
+    replacement.price = new_price;
+    replacement.quantity = new_qty;
+
+    if (new_price == node->order.price && new_qty <= node->order.quantity) {
+        const RejectReason invalid = validate_order_fields(replacement);
+        if (invalid != RejectReason::None)
+            return {{}, new_qty, invalid};
+        node->order.quantity = new_qty;
+        return {{}, 0, RejectReason::None};
+    }
+
+    const RejectReason invalid = validate_new_order(replacement, now);
+    if (invalid != RejectReason::None)
+        return {{}, new_qty, invalid};
+
+    cancel_order(order_id);
+    return add_order(replacement, now);
+}
+
+OrderResult Book::add_order(Order incoming, Timestamp now) {
+    const RejectReason invalid = validate_new_order(incoming, now);
+    if (invalid != RejectReason::None)
+        return {{}, incoming.quantity, invalid};
 
     OrderResult result;
     MatchPlan plan = plan_match(incoming);
@@ -177,15 +225,51 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
         }
     }
     if (halted_by_band) {
-        result.remaining_quantity = incoming.quantity;
-        result.reject_reason = RejectReason::SymbolHalted;
+        if (incoming.type == OrderType::Limit) {
+            const Price band_edge = incoming.side == Side::Buy
+                                        ? upper_band_price()
+                                        : lower_band_price();
+            incoming.price = incoming.side == Side::Buy
+                                 ? std::min(incoming.price, band_edge)
+                                 : std::max(incoming.price, band_edge);
+
+            if (validate_order_fields(incoming) == RejectReason::None) {
+                Node *node = node_pool_.acquire();
+                if (node != nullptr) {
+                    node->order = incoming;
+                    if (incoming.side == Side::Buy)
+                        get_or_create_level(bids_, incoming.price, node);
+                    else
+                        get_or_create_level(asks_, incoming.price, node);
+                    id_index_[incoming.id] = node;
+                    result.unaccepted_quantity = 0;
+                    result.reject_reason = RejectReason::None;
+                    result.rested_price = incoming.price;
+                } else {
+                    // A full pool cannot preserve the remainder; retain the
+                    // existing halt rejection rather than dropping silently.
+                    result.unaccepted_quantity = incoming.quantity;
+                    result.reject_reason = RejectReason::SymbolHalted;
+                }
+            } else {
+                // An invalid computed edge falls back to the existing halt
+                // rejection path instead of creating an invalid resting order.
+                result.unaccepted_quantity = incoming.quantity;
+                result.reject_reason = RejectReason::SymbolHalted;
+            }
+        } else {
+            // Market orders retain the existing halt behavior: their remainder
+            // is not placed on the book and reports SymbolHalted.
+            result.unaccepted_quantity = incoming.quantity;
+            result.reject_reason = RejectReason::SymbolHalted;
+        }
     } else if (plan.halted_by_self_trade) {
-        result.remaining_quantity = incoming.quantity;
+        result.unaccepted_quantity = incoming.quantity;
         result.reject_reason = RejectReason::SelfTrade;
     } else if (incoming.quantity > 0 && incoming.type == OrderType::Limit) {
         Node *node = node_pool_.acquire();
         if (node == nullptr) {
-            result.remaining_quantity = incoming.quantity;
+            result.unaccepted_quantity = incoming.quantity;
             result.reject_reason = RejectReason::PoolExhausted;
         } else {
             node->order = incoming;
@@ -196,11 +280,11 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
                 get_or_create_level(asks_, incoming.price, node);
 
             id_index_[incoming.id] = node;
-            result.remaining_quantity = 0;
+            result.unaccepted_quantity = 0;
             result.reject_reason = RejectReason::None;
         }
     } else {
-        result.remaining_quantity = 0;
+        result.unaccepted_quantity = 0;
         result.reject_reason = RejectReason::None;
     }
 
