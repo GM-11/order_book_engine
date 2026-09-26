@@ -102,6 +102,9 @@ bool Book::cancel_stop_order(OrderId order_id) {
 }
 
 void Book::check_and_trigger_stops(Price last_trade_price, Timestamp now) {
+    if (halted_)
+        return; // don't fire anything while halted; stops stay dormant
+
     std::vector<StopOrder> triggered;
 
     for (auto it = pending_stops_.begin(); it != pending_stops_.end();) {
