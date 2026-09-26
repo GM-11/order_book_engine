@@ -9,7 +9,7 @@ TEST_CASE("Stop sells and buys fire inclusively and submit market orders") {
         Book book;
         book.add_order({1, 11, Side::Buy, OrderType::Limit, 100, 1}, 1);
         book.add_order({2, 12, Side::Buy, OrderType::Limit, 100, 3}, 2);
-        book.place_stop_order({3, 13, Side::Sell, 100, 2});
+        book.place_stop_order({3, 13, Side::Sell, 100, 2}, 0);
 
         const auto trigger = book.add_order({4, 14, Side::Sell, OrderType::Limit, 100, 1}, 3);
 
@@ -25,7 +25,7 @@ TEST_CASE("Stop sells and buys fire inclusively and submit market orders") {
         Book book;
         book.add_order({1, 11, Side::Sell, OrderType::Limit, 100, 1}, 1);
         book.add_order({2, 12, Side::Sell, OrderType::Limit, 100, 3}, 2);
-        book.place_stop_order({3, 13, Side::Buy, 100, 2});
+        book.place_stop_order({3, 13, Side::Buy, 100, 2}, 0);
 
         const auto trigger = book.add_order({4, 14, Side::Buy, OrderType::Limit, 100, 1}, 3);
 
@@ -42,24 +42,24 @@ TEST_CASE("Triggered stops can cascade and are removed before firing") {
     Book book;
     book.add_order({1, 11, Side::Buy, OrderType::Limit, 100, 1}, 1);
     book.add_order({2, 12, Side::Buy, OrderType::Limit, 90, 1}, 2);
-    book.place_stop_order({3, 13, Side::Sell, 100, 1});
-    book.place_stop_order({4, 14, Side::Sell, 90, 1});
+    book.place_stop_order({3, 13, Side::Sell, 100, 1}, 0);
+    book.place_stop_order({4, 14, Side::Sell, 90, 1}, 0);
 
     const auto trigger = book.add_order({5, 15, Side::Sell, OrderType::Limit, 100, 1}, 3);
 
     REQUIRE(trigger.trades.size() == 1);
     CHECK(trigger.trades[0].price == 100);
     CHECK_FALSE(book.best_bid().has_value());
-    CHECK_FALSE(book.cancel_stop_order(3));
-    CHECK_FALSE(book.cancel_stop_order(4));
+    CHECK_FALSE(book.cancel_stop_order(3, 0));
+    CHECK_FALSE(book.cancel_stop_order(4, 0));
 }
 
 TEST_CASE("Cancelling a dormant stop prevents it from firing") {
     Book book;
     book.add_order({1, 11, Side::Buy, OrderType::Limit, 100, 1}, 1);
     book.add_order({2, 12, Side::Buy, OrderType::Limit, 100, 3}, 2);
-    book.place_stop_order({3, 13, Side::Sell, 100, 2});
-    CHECK(book.cancel_stop_order(3));
+    book.place_stop_order({3, 13, Side::Sell, 100, 2}, 0);
+    CHECK(book.cancel_stop_order(3, 0));
 
     book.add_order({4, 14, Side::Sell, OrderType::Limit, 100, 1}, 3);
     const auto remainder = book.add_order({5, 15, Side::Sell, OrderType::Market, 0, 3}, 4);
@@ -71,10 +71,10 @@ TEST_CASE("Cancelling a dormant stop prevents it from firing") {
 TEST_CASE("Stop cancellation does not consume resting-order pool capacity") {
     Book book{1};
     book.add_order({1, 11, Side::Buy, OrderType::Limit, 90, 1}, 1);
-    book.place_stop_order({2, 12, Side::Sell, 80, 1});
+    book.place_stop_order({2, 12, Side::Sell, 80, 1}, 0);
 
-    CHECK(book.cancel_stop_order(2));
-    CHECK(book.cancel_order(1));
+    CHECK(book.cancel_stop_order(2, 0));
+    CHECK(book.cancel_order(1, 0));
     const auto replacement = book.add_order({3, 13, Side::Buy, OrderType::Limit, 90, 1}, 2);
     CHECK(replacement.reject_reason == RejectReason::None);
     CHECK(book.best_bid() == 90);

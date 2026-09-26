@@ -199,7 +199,7 @@ TEST_CASE("Cancellation is never blocked by an active halt") {
     // A resting order and a dormant stop that the upcoming halt has no reason
     // to touch (they're on the bid side / far from the trigger price).
     book.add_order({100, 100, Side::Buy, OrderType::Limit, 95, 1}, 0);
-    book.place_stop_order({200, 200, Side::Sell, 100, 1});
+    book.place_stop_order({200, 200, Side::Sell, 100, 1}, 0);
 
     book.add_order({3, 3, Side::Sell, OrderType::Limit, 120, 1}, 1);
     book.add_order({4, 4, Side::Buy, OrderType::Market, 0, 1}, 1);
@@ -210,8 +210,8 @@ TEST_CASE("Cancellation is never blocked by an active halt") {
     REQUIRE(halted.reject_reason == RejectReason::SymbolHalted);
 
     // Still well within the halt window (halt_until_ = 70).
-    CHECK(book.cancel_order(100));
-    CHECK(book.cancel_stop_order(200));
+    CHECK(book.cancel_order(100, 0));
+    CHECK(book.cancel_stop_order(200, 0));
     expect_not_crossed(book);
 }
 
@@ -227,8 +227,8 @@ TEST_CASE("A stop that can't fire because the symbol is halted stays dormant, "
                    1); // breach level 1
     book.add_order({11, 101, Side::Sell, OrderType::Limit, 160, 1},
                    1); // breach level 2
-    book.place_stop_order(
-        {20, 200, Side::Sell, 150, 1}); // fires when last_trade_price <= 150
+    book.place_stop_order({20, 200, Side::Sell, 150, 1},
+                          0); // fires when last_trade_price <= 150
 
     const auto sweep =
         book.add_order({30, 300, Side::Buy, OrderType::Market, 0, 2}, 1);
@@ -243,7 +243,7 @@ TEST_CASE("A stop that can't fire because the symbol is halted stays dormant, "
 
     // The stop must still be cancellable -- proof it was never erased, unlike
     // the old (buggy) behavior where it vanished the instant the halt engaged.
-    CHECK(book.cancel_stop_order(20));
+    CHECK(book.cancel_stop_order(20, 0));
     expect_not_crossed(book);
 }
 
@@ -256,8 +256,8 @@ TEST_CASE("A dormant stop that survived a halt fires normally on the first "
 
     book.add_order({10, 100, Side::Sell, OrderType::Limit, 150, 1}, 1);
     book.add_order({11, 101, Side::Sell, OrderType::Limit, 160, 1}, 1);
-    book.place_stop_order(
-        {20, 200, Side::Sell, 150, 1}); // fires on last_trade_price <= 150
+    book.place_stop_order({20, 200, Side::Sell, 150, 1},
+                          0); // fires on last_trade_price <= 150
 
     const auto sweep =
         book.add_order({30, 300, Side::Buy, OrderType::Market, 0, 2}, 1);

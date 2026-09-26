@@ -92,8 +92,8 @@ TEST_CASE(
     CHECK(book.best_bid() == 490);
     CHECK(book.modify_order(2, 520, 1, 3).reject_reason == RejectReason::None);
     CHECK(book.best_ask() == 520);
-    CHECK(book.cancel_order(1));
-    CHECK(book.cancel_order(2));
+    CHECK(book.cancel_order(1, 0));
+    CHECK(book.cancel_order(2, 0));
     CHECK_FALSE(book.best_bid().has_value());
     CHECK_FALSE(book.best_ask().has_value());
     expect_not_crossed(book);
@@ -133,7 +133,7 @@ TEST_CASE("Unknown, filled and cancelled ids cannot be modified") {
     CHECK(book.modify_order(1, 501, 1, 3).reject_reason ==
           RejectReason::UnknownOrder);
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 490, 1}, 4);
-    CHECK(book.cancel_order(3));
+    CHECK(book.cancel_order(3, 0));
     CHECK(book.modify_order(3, 501, 1, 5).reject_reason ==
           RejectReason::UnknownOrder);
     CHECK_FALSE(book.best_bid().has_value());
@@ -259,10 +259,10 @@ TEST_CASE("A partially filled order can reduce its remaining size without "
 
 TEST_CASE("Dormant stop ids are not eligible for limit-order modification") {
     Book book;
-    book.place_stop_order({1, 1, Side::Sell, 500, 1});
+    book.place_stop_order({1, 1, Side::Sell, 500, 1}, 0);
     CHECK(book.modify_order(1, 501, 2, 0).reject_reason ==
           RejectReason::UnknownOrder);
-    CHECK(book.cancel_stop_order(1));
+    CHECK(book.cancel_stop_order(1, 0));
     expect_not_crossed(book);
 }
 
@@ -287,7 +287,7 @@ TEST_CASE("A crossing reprice triggers and executes an eligible dormant stop") {
     Book book;
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 1}, 0);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 505, 2}, 1);
-    book.place_stop_order({3, 3, Side::Buy, 505, 1});
+    book.place_stop_order({3, 3, Side::Buy, 505, 1}, 0);
 
     const auto modified = book.modify_order(1, 505, 1, 2);
     REQUIRE(modified.trades.size() == 1);
@@ -297,7 +297,7 @@ TEST_CASE("A crossing reprice triggers and executes an eligible dormant stop") {
     CHECK_FALSE(
         book.best_ask()
             .has_value()); // the stop's market buy consumed the other unit
-    CHECK_FALSE(book.cancel_stop_order(3));
+    CHECK_FALSE(book.cancel_stop_order(3, 0));
     expect_not_crossed(book);
 }
 
@@ -449,7 +449,7 @@ TEST_CASE("A market order does not rest a remainder when a halt trips") {
     CHECK(result.unaccepted_quantity == 3);
     CHECK(result.reject_reason == RejectReason::SymbolHalted);
     CHECK_FALSE(result.rested_price.has_value());
-    CHECK_FALSE(book.cancel_order(10));
+    CHECK_FALSE(book.cancel_order(10, 0));
     CHECK(book.best_ask() == 160);
     expect_not_crossed(book);
     expect_not_crossed(book);
