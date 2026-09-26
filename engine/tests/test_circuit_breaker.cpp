@@ -10,6 +10,7 @@ void expect_not_crossed(const Book &book) {
     const auto ask = book.best_ask();
     if (bid && ask)
         CHECK(*bid < *ask);
+    CHECK(book.check_invariants()); // full audit: totals, links, index
 }
 } // namespace
 
