@@ -92,7 +92,7 @@ For market orders, `price` is unused and should conventionally be `0`.
 ```cpp
 struct OrderResult {
     std::vector<Trade> trades;
-    Quantity remaining_quantity;
+    Quantity unaccepted_quantity;
     RejectReason reject_reason;
 };
 ```
@@ -103,7 +103,7 @@ struct OrderResult {
 - Quantity must be positive.
 - A limit order that cannot be stored because the pool is exhausted returns `PoolExhausted`.
 - If self-trade prevention stops matching, already-executed trades are retained and the unmatched amount is returned with `SelfTrade`.
-- On the normal accepted path, `remaining_quantity` is `0`; any unfilled limit quantity has been placed on the book. Market-order liquidity that is unavailable is discarded.
+- On the normal accepted path, `unaccepted_quantity` is `0`; any unfilled limit quantity has been placed on the book. Market-order liquidity that is unavailable is discarded.
 
 ## Self-trade prevention
 
