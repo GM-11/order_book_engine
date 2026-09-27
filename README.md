@@ -102,7 +102,7 @@ struct OrderResult {
 - A limit price must be positive.
 - Quantity must be positive.
 - A limit order that cannot be stored because the pool is exhausted returns `PoolExhausted`.
-- An order or stop whose id belongs to a live resting order or a dormant stop is rejected with `DuplicateOrderId` before matching. Ids are checked against live orders only; a filled or cancelled id can be reused. (Long term the gateway should assign engine ids and keep the client's own id separately.)
+- An order or stop whose id belongs to a live resting order, a dormant stop, or an order that already finished this session is rejected with `DuplicateOrderId` before matching. A finished id cannot be reused within a session. (Long term the gateway should assign engine ids and keep the client's own id separately.)
 - If self-trade prevention stops matching, already-executed trades are retained and the unmatched amount is returned with `SelfTrade`.
 - On the normal accepted path for a limit order, `unaccepted_quantity` is `0`; any unfilled quantity has been placed on the book. For a market order, quantity with no liquidity left is cancelled and reported in `unaccepted_quantity` (with `RejectReason::None`, since cancelling the rest is not a rejection).
 
@@ -128,9 +128,20 @@ book.place_stop_order({
 - A stop-buy triggers when the highest price traded in a match `>= stop_price`.
   (A single sweep can trade through several prices; a stop fires if any of them touches it.)
 - Trigger checks occur only after a real trade.
-- Triggered stops are removed from the dormant list before their market orders are submitted. This prevents duplicate triggering and makes recursive cascades safe.
+- Triggered stops are removed from the dormant list and appended to a FIFO queue before their market orders are submitted, which prevents duplicate triggering.
+- Stops fire in the order they **triggered** (breadth-first). If stops A and B trigger on the same trade and A's fill then triggers C, the order is A, B, C: B triggered first, so it fires before C. Only the outermost call drains the queue; a triggered stop's own fills only append to it, so a long cascade never nests calls.
 - `cancel_stop_order(order_id, now)` cancels a dormant stop; `cancel_order(order_id, now)` cancels a resting limit order.
 - While the symbol is halted, stops are not checked. If a batch of triggered stops trips the halt part-way through, the stops that had not fired yet go back to the front of the dormant list. After the halt they are re-evaluated against post-halt trades like any other stop, so a stop can stay dormant if the market reopens on the other side of its stop price. This is a deliberate policy, pinned by a test; revisit it with the reopening auction.
+
+## Price protection
+
+The book has a LULD-style price band (`band_bps`, a percentage of the last trade price in basis points), plus two per-order protections.
+
+- **Grace print, then halt.** The first fill outside the band is allowed and starts a grace clock. An out-of-band fill after `grace_period_ms` halts the symbol for `halt_duration_ms`. An in-band fill resets the clock.
+- **One breach level per sweep.** One order may trade at only one out-of-band price level (all resting orders at that price). It may not walk on to a further level, so a single large order cannot move the price 10x in one call. The walk stops; a limit remainder rests at the band edge (`rested_price`), and a market remainder is cancelled with `RejectReason::PriceBand`.
+- **Market-order collar** (`market_collar_bps`, 5th constructor argument, `0` = off). A market order never fills beyond the last trade price +/- the collar; its remainder is cancelled with `RejectReason::PriceCollar`. Limit orders are not collared, because their limit price is already a bound. There is no collar before the first trade.
+
+Real LULD is stricter (no trades outside the band at all; a limit state, then a pause and a reopening auction). That model is deferred to the call-auction work.
 
 ## Event stream
 
