@@ -58,7 +58,7 @@ class Book {
     OrderResult add_order(Order order, Timestamp now);
     OrderResult modify_order(OrderId order_id, Price new_price,
                              Quantity new_qty, Timestamp now);
-    bool cancel_order(OrderId order_id, Timestamp now);
+    RejectReason cancel_order(OrderId order_id, Timestamp now);
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
     // Top max_levels price levels per side, aggregated. O(max_levels).
@@ -77,6 +77,13 @@ class Book {
         if (!has_reference_price_)
             return true; // nothing traded yet, nothing to compare against
         return p >= lower_band_price() && p <= upper_band_price();
+    }
+
+    std::optional<FinalState> final_state(OrderId id) const {
+        const auto it = finished_orders_.find(id);
+        if (it == finished_orders_.end())
+            return std::nullopt;
+        return it->second;
     }
 
   private:
@@ -104,6 +111,7 @@ class Book {
     std::map<Price, Level, std::greater<Price>> bids_;
     std::map<Price, Level> asks_;
     std::unordered_map<OrderId, Node *> id_index_;
+    std::unordered_map<OrderId, FinalState> finished_orders_;
     std::vector<StopOrder> pending_stops_;
     NodePool node_pool_;
     TradeId next_trade_id_;
@@ -111,6 +119,9 @@ class Book {
     SequenceNumber next_seq_ = 1;
     void emit(EngineEvent e) {
         e.sequence_number = next_seq_++;
+        if (e.kind == EventKind::Cancelled ||
+            e.kind == EventKind::StopCancelled)
+            finished_orders_[e.order_id] = FinalState::Cancelled;
         events_.push_back(e);
     }
 
