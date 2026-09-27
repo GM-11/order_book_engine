@@ -20,7 +20,7 @@ struct Order {
     OrderType type;
     Price price;
     Quantity quantity;
-    Quantity filled;
+    Quantity filled = 0;
 
     bool is_fully_filled() const { return quantity == 0; }
 };
