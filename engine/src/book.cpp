@@ -10,11 +10,26 @@ MatchPlan Book::plan_match(const Order &incoming) const {
     MatchPlan plan;
     Quantity remaining = incoming.quantity;
 
+    // Apply the configured collar to market orders when a reference exists.
+    const bool collared = incoming.type == OrderType::Market &&
+                          market_collar_bps_ > 0 && has_reference_price_;
+    auto inside_collar = [&](Price price) {
+        if (!collared)
+            return true;
+        return incoming.side == Side::Buy
+                   ? price <= upper_limit(market_collar_bps_)
+                   : price >= lower_limit(market_collar_bps_);
+    };
+
     auto walk_side = [&](const auto &side_map, const auto &crosses) {
         for (auto level_it = side_map.begin();
              level_it != side_map.end() && remaining > 0; ++level_it) {
             if (!crosses(level_it->first))
                 break;
+            if (!inside_collar(level_it->first)) {
+                plan.stopped_by_collar = true;
+                return;
+            }
 
             const Level &level = level_it->second;
             for (Node *node = level.head; node && remaining > 0;
@@ -81,34 +96,44 @@ void Book::check_and_trigger_stops(Price low_trade_price,
     if (halted_)
         return; // don't fire anything while halted; stops stay dormant
 
-    std::vector<StopOrder> triggered;
-
+    // Queue triggered stops in entry order.
     for (auto it = pending_stops_.begin(); it != pending_stops_.end();) {
         const bool fires =
             (it->side == Side::Sell && low_trade_price <= it->stop_price) ||
             (it->side == Side::Buy && high_trade_price >= it->stop_price);
 
         if (fires) {
-            triggered.push_back(*it);
+            triggered_stops_.push_back(*it);
             it = pending_stops_.erase(it);
         } else {
             ++it;
         }
     }
 
-    for (std::size_t i = 0; i < triggered.size(); ++i) {
+    // Nested cascades return; the outer FIFO drain preserves trigger order.
+    if (draining_stops_)
+        return;
+
+    draining_stops_ = true;
+    while (!triggered_stops_.empty()) {
         if (halted_) {
-            pending_stops_.insert(pending_stops_.begin(), triggered.begin() + i,
-                                  triggered.end());
-            return;
+            // Unfired stops go back to dormant, still in trigger order, ahead
+            // of stops that never triggered.
+            pending_stops_.insert(pending_stops_.begin(),
+                                  triggered_stops_.begin(),
+                                  triggered_stops_.end());
+            triggered_stops_.clear();
+            break;
         }
-        const StopOrder &s = triggered[i];
+        const StopOrder s = triggered_stops_.front();
+        triggered_stops_.pop_front();
         emit({0, EventKind::StopTriggered, now, s.id, 0, s.owner_id, 0, s.side,
               s.stop_price, s.quantity});
         add_order(
             {s.id, s.owner_id, s.side, OrderType::Market, 0, s.quantity, 0},
             now);
     }
+    draining_stops_ = false;
 }
 OrderResult Book::modify_order(OrderId order_id, Price new_price,
                                Quantity new_total_qty, Timestamp now) {
@@ -179,12 +204,17 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
     MatchPlan plan = plan_match(incoming);
 
     bool halted_by_band = false;
+    bool band_limited = false;
+    // The out-of-band price level this call is allowed to trade at (the
+    // grace print). The walk may finish that level but not go past it.
+    std::optional<Price> breach_level;
 
     for (const ProposedFill &fill : plan.fills) {
 
         if (!within_band(fill.fill_price)) {
             if (!outside_band_since_) {
                 outside_band_since_ = now;
+                breach_level = fill.fill_price;
             } else if (now - *outside_band_since_ >= grace_period_ms_) {
                 halted_by_band = true;
                 halted_ = true;
@@ -192,6 +222,14 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
                 emit({0, EventKind::Halted, now, incoming.id, 0,
                       incoming.owner_id, 0, incoming.side, fill.fill_price,
                       incoming.quantity});
+                break;
+            } else if (!breach_level) {
+                // This call gets one breach level during the active grace
+                // period.
+                breach_level = fill.fill_price;
+            } else if (fill.fill_price != *breach_level) {
+                // Grace permits one breach level, not a wider sweep.
+                band_limited = true;
                 break;
             }
         } else {
@@ -225,7 +263,13 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
     }
     if (incoming.quantity == 0)
         finished_orders_[incoming.id] = FinalState::Filled;
-    if (halted_by_band) {
+    if (halted_by_band || band_limited) {
+        // Same treatment whether the walk stopped because of a halt or the
+        // one-level sweep limit: a limit remainder rests at the band edge
+        // (can't cross: everything left on the other side is past the edge), a
+        // market remainder is cancelled.
+        const RejectReason why = halted_by_band ? RejectReason::SymbolHalted
+                                                : RejectReason::PriceBand;
         if (incoming.type == OrderType::Limit) {
             const Price band_edge = incoming.side == Side::Buy
                                         ? upper_band_price()
@@ -250,10 +294,10 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
                     result.reject_reason = RejectReason::None;
                     result.rested_price = incoming.price;
                 } else {
-                    // A full pool cannot preserve the remainder; retain the
-                    // existing halt rejection rather than dropping silently.
+                    // A full pool cannot preserve the remainder; report why
+                    // the walk stopped rather than dropping silently.
                     result.unaccepted_quantity = incoming.quantity;
-                    result.reject_reason = RejectReason::SymbolHalted;
+                    result.reject_reason = why;
                     emit({0, EventKind::Cancelled, now, incoming.id, 0,
                           incoming.owner_id, 0, incoming.side, incoming.price,
                           incoming.quantity});
@@ -262,16 +306,16 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
                 // An invalid computed edge falls back to the existing halt
                 // rejection path instead of creating an invalid resting order.
                 result.unaccepted_quantity = incoming.quantity;
-                result.reject_reason = RejectReason::SymbolHalted;
+                result.reject_reason = why;
                 emit({0, EventKind::Cancelled, now, incoming.id, 0,
                       incoming.owner_id, 0, incoming.side, incoming.price,
                       incoming.quantity});
             }
         } else {
-            // Market orders retain the existing halt behavior: their remainder
-            // is not placed on the book and reports SymbolHalted.
+            // A market remainder is never placed on the book; it is cancelled
+            // and reports why (SymbolHalted or PriceBand).
             result.unaccepted_quantity = incoming.quantity;
-            result.reject_reason = RejectReason::SymbolHalted;
+            result.reject_reason = why;
             if (incoming.quantity > 0)
                 emit({0, EventKind::Cancelled, now, incoming.id, 0,
                       incoming.owner_id, 0, incoming.side, incoming.price,
@@ -307,7 +351,9 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
         }
     } else {
         result.unaccepted_quantity = incoming.quantity;
-        result.reject_reason = RejectReason::None;
+        result.reject_reason = plan.stopped_by_collar && incoming.quantity > 0
+                                   ? RejectReason::PriceCollar
+                                   : RejectReason::None;
         if (incoming.type == OrderType::Market && incoming.quantity > 0)
             emit({0, EventKind::Cancelled, now, incoming.id, 0,
                   incoming.owner_id, 0, incoming.side, incoming.price,
