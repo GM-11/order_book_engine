@@ -8,6 +8,7 @@
 #include "engine/trade.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
@@ -26,6 +27,7 @@ struct ProposedFill {
 struct MatchPlan {
     std::vector<ProposedFill> fills;
     bool halted_by_self_trade = false;
+    bool stopped_by_collar = false; // market order hit its price collar
 };
 
 struct DepthLevel {
@@ -47,12 +49,17 @@ class Book {
     explicit Book(std::size_t pool_capacity = 100000,
                   std::int64_t band_bps = 1000,
                   Timestamp grace_period_ms = 2000,
-                  Timestamp halt_duration_ms = 30000)
+                  Timestamp halt_duration_ms = 30000,
+                  std::int64_t market_collar_bps = 0) // 0 = no collar
         : node_pool_(pool_capacity), next_trade_id_(1), band_bps_(band_bps),
           grace_period_ms_(grace_period_ms),
-          halt_duration_ms_(halt_duration_ms) {
+          halt_duration_ms_(halt_duration_ms),
+          market_collar_bps_(market_collar_bps) {
         if (band_bps_ <= 0 || band_bps_ >= 10000)
             throw std::invalid_argument("band_bps must be in (0, 10000)");
+        if (market_collar_bps_ < 0 || market_collar_bps_ >= 10000)
+            throw std::invalid_argument(
+                "market_collar_bps must be in [0, 10000)");
     }
 
     OrderResult add_order(Order order, Timestamp now);
@@ -87,8 +94,11 @@ class Book {
     }
 
   private:
-    Price lower_band_price() const;
-    Price upper_band_price() const;
+    // reference_price_ -/+ bps, rounded inward to whole ticks.
+    Price lower_limit(std::int64_t bps) const;
+    Price upper_limit(std::int64_t bps) const;
+    Price lower_band_price() const { return lower_limit(band_bps_); }
+    Price upper_band_price() const { return upper_limit(band_bps_); }
     RejectReason validate_order_fields(const Order &order) const;
     RejectReason validate_new_order(const Order &order, Timestamp now);
     MatchPlan plan_match(const Order &incoming) const;
@@ -113,6 +123,11 @@ class Book {
     std::unordered_map<OrderId, Node *> id_index_;
     std::unordered_map<OrderId, FinalState> finished_orders_;
     std::vector<StopOrder> pending_stops_;
+    // Stops that have triggered but not fired yet, in trigger order (FIFO).
+    // Only the outermost check_and_trigger_stops call drains it; nested
+    // calls (from a triggered stop's own fills) only append to the back.
+    std::deque<StopOrder> triggered_stops_;
+    bool draining_stops_ = false;
     NodePool node_pool_;
     TradeId next_trade_id_;
     std::vector<EngineEvent> events_;
@@ -130,6 +145,7 @@ class Book {
     std::int64_t band_bps_;
     Timestamp grace_period_ms_;
     Timestamp halt_duration_ms_;
+    std::int64_t market_collar_bps_;
     Price reference_price_ = 0;
     bool has_reference_price_ = false;
     std::optional<Timestamp> outside_band_since_;
