@@ -69,7 +69,7 @@ TEST_CASE("Cancel, in-place modify and replace keep totals correct") {
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 100, 3}, 1);
 
     SECTION("cancel") {
-        REQUIRE(book.cancel_order(1, 2));
+        REQUIRE(book.cancel_order(1, 2) == RejectReason::None);
         check_level(book.depth(10).bids.at(0), 100, 3, 1);
         CHECK(book.check_invariants());
     }

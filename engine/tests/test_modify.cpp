@@ -92,8 +92,8 @@ TEST_CASE(
     CHECK(book.best_bid() == 490);
     CHECK(book.modify_order(2, 520, 1, 3).reject_reason == RejectReason::None);
     CHECK(book.best_ask() == 520);
-    CHECK(book.cancel_order(1, 0));
-    CHECK(book.cancel_order(2, 0));
+    CHECK(book.cancel_order(1, 0) == RejectReason::None);
+    CHECK(book.cancel_order(2, 0) == RejectReason::None);
     CHECK_FALSE(book.best_bid().has_value());
     CHECK_FALSE(book.best_ask().has_value());
     expect_not_crossed(book);
@@ -123,7 +123,7 @@ TEST_CASE("A crossing reprice executes at the passive price and rests its "
     expect_not_crossed(book);
 }
 
-TEST_CASE("Unknown, filled and cancelled ids cannot be modified") {
+TEST_CASE("Unknown ids are UnknownOrder; filled and cancelled ids are TooLate") {
     Book book;
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 1}, 0);
     CHECK(book.modify_order(99, 501, 1, 1).reject_reason ==
@@ -131,11 +131,13 @@ TEST_CASE("Unknown, filled and cancelled ids cannot be modified") {
     CHECK(book.best_bid() == 500);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 500, 1}, 2);
     CHECK(book.modify_order(1, 501, 1, 3).reject_reason ==
-          RejectReason::UnknownOrder);
+          RejectReason::TooLate); // #1 was filled
+    CHECK(book.final_state(1) == FinalState::Filled);
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 490, 1}, 4);
-    CHECK(book.cancel_order(3, 0));
+    CHECK(book.cancel_order(3, 0) == RejectReason::None);
     CHECK(book.modify_order(3, 501, 1, 5).reject_reason ==
-          RejectReason::UnknownOrder);
+          RejectReason::TooLate); // #3 was cancelled
+    CHECK(book.final_state(3) == FinalState::Cancelled);
     CHECK_FALSE(book.best_bid().has_value());
     expect_not_crossed(book);
 }
@@ -244,7 +246,9 @@ TEST_CASE("A partially filled order can reduce its remaining size without "
         book.add_order({3, 3, Side::Sell, OrderType::Limit, 500, 30}, 2);
     REQUIRE(partial.trades.size() == 1);
     CHECK(partial.trades[0].passive_id == 1);
-    CHECK(book.modify_order(1, 500, 50, 3).reject_reason == RejectReason::None);
+    // Modify qty is the TOTAL: 30 already filled + 50 left = 80. 50 left is
+    // less than the 70 resting, so it is edited in place and stays ahead of #2.
+    CHECK(book.modify_order(1, 500, 80, 3).reject_reason == RejectReason::None);
     const auto next =
         book.add_order({4, 4, Side::Sell, OrderType::Limit, 500, 50}, 4);
     REQUIRE(next.trades.size() == 1);
@@ -449,7 +453,8 @@ TEST_CASE("A market order does not rest a remainder when a halt trips") {
     CHECK(result.unaccepted_quantity == 3);
     CHECK(result.reject_reason == RejectReason::SymbolHalted);
     CHECK_FALSE(result.rested_price.has_value());
-    CHECK_FALSE(book.cancel_order(10, 0));
+    // Remainder cancelled by the halt: the order existed, so TooLate.
+    CHECK(book.cancel_order(10, 0) == RejectReason::TooLate);
     CHECK(book.best_ask() == 160);
     expect_not_crossed(book);
     expect_not_crossed(book);

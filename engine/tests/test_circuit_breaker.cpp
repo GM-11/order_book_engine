@@ -211,7 +211,7 @@ TEST_CASE("Cancellation is never blocked by an active halt") {
     REQUIRE(halted.reject_reason == RejectReason::SymbolHalted);
 
     // Still well within the halt window (halt_until_ = 70).
-    CHECK(book.cancel_order(100, 0));
+    CHECK(book.cancel_order(100, 0) == RejectReason::None);
     CHECK(book.cancel_stop_order(200, 0));
     expect_not_crossed(book);
 }

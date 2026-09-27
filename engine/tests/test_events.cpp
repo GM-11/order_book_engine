@@ -62,7 +62,7 @@ TEST_CASE("Order lifecycle events are timestamped and sequenced") {
     CHECK(modified[0].ts == 11);
     CHECK(modified[0].quantity == 3);
 
-    REQUIRE(book.cancel_order(1, 12));
+    REQUIRE(book.cancel_order(1, 12) == RejectReason::None);
     const auto cancelled = book.drain_events();
     REQUIRE(cancelled.size() == 1);
     CHECK(cancelled[0].sequence_number == 4);
@@ -238,7 +238,7 @@ TEST_CASE("A reprice modify emits Replaced, never a terminal Cancelled") {
     expect_every_order_terminates(events);
 
     // A user cancel is still a Cancelled.
-    REQUIRE(book.cancel_order(1, 3));
+    REQUIRE(book.cancel_order(1, 3) == RejectReason::None);
     const auto cancelled = book.drain_events();
     REQUIRE(cancelled.size() == 1);
     CHECK(cancelled[0].kind == EventKind::Cancelled);

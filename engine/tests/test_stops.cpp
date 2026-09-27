@@ -76,7 +76,7 @@ TEST_CASE("Stop cancellation does not consume resting-order pool capacity") {
     book.place_stop_order({2, 12, Side::Sell, 80, 1}, 0);
 
     CHECK(book.cancel_stop_order(2, 0));
-    CHECK(book.cancel_order(1, 0));
+    CHECK(book.cancel_order(1, 0) == RejectReason::None);
     const auto replacement = book.add_order({3, 13, Side::Buy, OrderType::Limit, 90, 1}, 2);
     CHECK(replacement.reject_reason == RejectReason::None);
     CHECK(book.best_bid() == 90);

@@ -18,7 +18,7 @@ TEST_CASE("A resting order id cannot be reused while the order is live") {
     CHECK(book.best_bid() == 100);      // the original is untouched
 
     // The original stays reachable: one cancel empties the book.
-    CHECK(book.cancel_order(1, 3));
+    CHECK(book.cancel_order(1, 3) == RejectReason::None);
     CHECK_FALSE(book.best_bid().has_value());
 }
 
