@@ -16,6 +16,12 @@ enum class RejectReason {
     UnknownOrder,
     DuplicateOrderId,
     TooLate,
+    // Walk stopped: the next fill would go past this call's first
+    // out-of-band price level (one breach print per sweep, not a whole sweep).
+    PriceBand,
+    // Market order stopped by its collar: no fills beyond
+    // reference price +/- collar_bps.
+    PriceCollar,
 };
 
 struct OrderResult {
