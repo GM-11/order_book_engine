@@ -15,6 +15,7 @@ enum class RejectReason {
     SymbolHalted,
     UnknownOrder,
     DuplicateOrderId,
+    TooLate,
 };
 
 struct OrderResult {
