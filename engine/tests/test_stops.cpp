@@ -122,3 +122,53 @@ TEST_CASE("A stop put back by a halt is re-evaluated against post-halt trades") 
         return e.kind == EventKind::Trade && e.order_id == 11;
     }));
 }
+
+TEST_CASE("Triggered stops fire in trigger order, not depth-first") {
+    Book book;
+    book.add_order({1, 1, Side::Buy, OrderType::Limit, 100, 1}, 0);
+    book.add_order({2, 1, Side::Buy, OrderType::Limit, 99, 1}, 0);
+    book.add_order({3, 1, Side::Buy, OrderType::Limit, 98, 1}, 0);
+    book.add_order({4, 1, Side::Buy, OrderType::Limit, 97, 5}, 0);
+    book.place_stop_order({50, 7, Side::Sell, 100, 1}, 0); // S1
+    book.place_stop_order({51, 8, Side::Sell, 100, 1}, 0); // S2
+    book.place_stop_order({52, 9, Side::Sell, 99, 1}, 0);  // S3
+    book.drain_events();
+
+    // Trade at 100 triggers S1 and S2 together. S1's fill at 99 then
+    // triggers S3 -- later than S2, so S3 must fire after S2.
+    book.add_order({60, 2, Side::Sell, OrderType::Market, 0, 1}, 1);
+
+    std::vector<OrderId> triggered;
+    std::vector<std::pair<OrderId, Price>> fills;
+    for (const auto &e : book.drain_events()) {
+        if (e.kind == EventKind::StopTriggered)
+            triggered.push_back(e.order_id);
+        if (e.kind == EventKind::Trade)
+            fills.push_back({e.order_id, e.price});
+    }
+    CHECK(triggered == std::vector<OrderId>{50, 51, 52});
+    CHECK(fills == std::vector<std::pair<OrderId, Price>>{
+                       {60, 100}, {50, 99}, {51, 98}, {52, 97}});
+    CHECK(book.check_invariants());
+}
+
+TEST_CASE("A long stop cascade fires every stop, one level each") {
+    // 2000 sell stops, each triggered by the previous one's fill one tick
+    // lower. The queue keeps this flat: one drain loop, no nested draining.
+    constexpr int n = 2000;
+    Book book(10000);
+    for (int i = 0; i <= n + 1; ++i)
+        book.add_order({static_cast<OrderId>(1 + i), 1, Side::Buy,
+                        OrderType::Limit, 10000 - i, 1},
+                       0);
+    for (int i = 0; i < n; ++i)
+        book.place_stop_order(
+            {static_cast<OrderId>(100000 + i), 2, Side::Sell, 10000 - i, 1},
+            0);
+
+    REQUIRE(book.add_order({900000, 3, Side::Sell, OrderType::Market, 0, 1}, 1)
+                .trades.size() == 1);
+    // The market sell took 10000, the stops took 9999 .. 10000-n.
+    CHECK(book.best_bid() == 10000 - n - 1);
+    CHECK(book.check_invariants());
+}
