@@ -62,14 +62,14 @@ Book::get_or_create_level(std::map<Price, Level, std::greater<Price>> &, Price,
 template void Book::get_or_create_level(std::map<Price, Level> &, Price,
                                         Node *);
 
-Price Book::lower_band_price() const {
-    const std::int64_t product = reference_price_ * (10000 - band_bps_);
-    return (product + 9999) / 10000;
+Price Book::lower_limit(std::int64_t bps) const {
+    const std::int64_t product = reference_price_ * (10000 - bps);
+    return (product + 9999) / 10000; // ceil: round inward
 }
 
-Price Book::upper_band_price() const {
-    const std::int64_t product = reference_price_ * (10000 + band_bps_);
-    return product / 10000;
+Price Book::upper_limit(std::int64_t bps) const {
+    const std::int64_t product = reference_price_ * (10000 + bps);
+    return product / 10000; // floor: round inward
 }
 
 std::optional<Price> Book::best_bid() const {
