@@ -20,9 +20,12 @@ struct Order {
     OrderType type;
     Price price;
     Quantity quantity;
+    Quantity filled;
 
     bool is_fully_filled() const { return quantity == 0; }
 };
+
+enum class FinalState { Filled, Cancelled };
 
 struct StopOrder {
     OrderId id;
