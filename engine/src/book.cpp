@@ -217,7 +217,7 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
         fill.passive_node->order.filled += fill.fill_quantity;
         reduce_resting(fill.passive_node, fill.fill_quantity);
         incoming.quantity -= fill.fill_quantity;
-
+        incoming.filled += fill.fill_quantity;
         if (fill.passive_node->order.is_fully_filled()) {
             finished_orders_[fill.passive_node->order.id] = FinalState::Filled;
             remove_resting(fill.passive_node);
