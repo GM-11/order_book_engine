@@ -105,36 +105,58 @@ void Book::check_and_trigger_stops(Price low_trade_price,
         const StopOrder &s = triggered[i];
         emit({0, EventKind::StopTriggered, now, s.id, 0, s.owner_id, 0, s.side,
               s.stop_price, s.quantity});
-        add_order({s.id, s.owner_id, s.side, OrderType::Market, 0, s.quantity},
-                  now);
+        add_order(
+            {s.id, s.owner_id, s.side, OrderType::Market, 0, s.quantity, 0},
+            now);
     }
 }
-
 OrderResult Book::modify_order(OrderId order_id, Price new_price,
-                               Quantity new_qty, Timestamp now) {
+                               Quantity new_total_qty, Timestamp now) {
     const auto it = id_index_.find(order_id);
-    if (it == id_index_.end())
-        return {{}, new_qty, RejectReason::UnknownOrder};
+    if (it == id_index_.end()) {
+        const RejectReason why = finished_orders_.contains(order_id)
+                                     ? RejectReason::TooLate
+                                     : RejectReason::UnknownOrder;
+        return {{}, new_total_qty, why};
+    }
 
     Node *node = it->second;
-    Order replacement = node->order;
+    Order replacement = node->order; // carries filled_quantity over
     replacement.price = new_price;
-    replacement.quantity = new_qty;
+    replacement.quantity = new_total_qty;
+    // Validate what the client actually sent (total > 0, price > 0).
+    if (const RejectReason bad = validate_order_fields(replacement);
+        bad != RejectReason::None)
+        return {{}, new_total_qty, bad};
 
-    if (new_price == node->order.price && new_qty <= node->order.quantity) {
-        const RejectReason invalid = validate_order_fields(replacement);
-        if (invalid != RejectReason::None)
-            return {{}, new_qty, invalid};
-        reduce_resting(node, node->order.quantity - new_qty);
+    const Quantity new_remaining = new_total_qty - node->order.filled;
+
+    // In-flight fill: the client already has as much as (or more than) it
+    // now wants. Cancel the rest (CME IFM behaviour). Allowed during a halt,
+    // like any cancel: it only reduces risk.
+    if (new_remaining <= 0) {
+        emit({0, EventKind::Cancelled, now, node->order.id, 0,
+              node->order.owner_id, 0, node->order.side, node->order.price,
+              node->order.quantity});
+        remove_resting(node); // after emit: node is freed here
+        return {{}, 0, RejectReason::None};
+    }
+    replacement.quantity = new_remaining;
+
+    // Same price and not bigger: edit in place, keep queue priority.
+    if (new_price == node->order.price &&
+        new_remaining <= node->order.quantity) {
+        reduce_resting(node, node->order.quantity - new_remaining);
         emit({0, EventKind::Modified, now, node->order.id, 0,
               node->order.owner_id, 0, node->order.side, node->order.price,
               node->order.quantity});
         return {{}, 0, RejectReason::None};
     }
 
+    // Bigger or repriced: loses priority (unchanged from before).
     const RejectReason invalid = validate_new_order(replacement, now);
     if (invalid != RejectReason::None)
-        return {{}, new_qty, invalid};
+        return {{}, new_total_qty, invalid};
 
     emit({0, EventKind::Replaced, now, node->order.id, 0, node->order.owner_id,
           0, node->order.side, node->order.price, node->order.quantity});
@@ -192,12 +214,17 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
               trade.buy_owner, trade.sell_owner, trade.aggressor_side,
               trade.price, trade.quantity});
 
+        fill.passive_node->order.filled += fill.fill_quantity;
         reduce_resting(fill.passive_node, fill.fill_quantity);
         incoming.quantity -= fill.fill_quantity;
 
-        if (fill.passive_node->order.is_fully_filled())
+        if (fill.passive_node->order.is_fully_filled()) {
+            finished_orders_[fill.passive_node->order.id] = FinalState::Filled;
             remove_resting(fill.passive_node);
+        }
     }
+    if (incoming.quantity == 0)
+        finished_orders_[incoming.id] = FinalState::Filled;
     if (halted_by_band) {
         if (incoming.type == OrderType::Limit) {
             const Price band_edge = incoming.side == Side::Buy
@@ -299,20 +326,21 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
     return result;
 }
 
-bool Book::cancel_order(OrderId order_id, Timestamp now) {
+RejectReason Book::cancel_order(OrderId order_id, Timestamp now) {
     auto it = id_index_.find(order_id);
     if (it == id_index_.end())
-        return false;
+        return finished_orders_.contains(order_id) ? RejectReason::TooLate
+                                                   : RejectReason::UnknownOrder;
 
     Node *node = it->second;
     emit({0, EventKind::Cancelled, now, node->order.id, 0, node->order.owner_id,
           0, node->order.side, node->order.price, node->order.quantity});
     remove_resting(node);
-    return true;
+    return RejectReason::None;
 }
 
 bool Book::id_in_use(OrderId id) const {
-    return id_index_.contains(id) ||
+    return id_index_.contains(id) || finished_orders_.contains(id) ||
            std::any_of(pending_stops_.begin(), pending_stops_.end(),
                        [id](const StopOrder &s) { return s.id == id; });
 }
