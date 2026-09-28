@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace engine {
@@ -18,7 +19,9 @@ struct Order {
     OwnerId owner_id;
     Side side;
     OrderType type;
-    Price price;
+    // Limit: required, > 0. Market: must be empty (a market order has no
+    // price; a value here is rejected rather than silently ignored).
+    std::optional<Price> price;
     Quantity quantity;
     Quantity filled = 0;
 
@@ -33,6 +36,9 @@ struct StopOrder {
     Side side;
     Price stop_price;
     Quantity quantity;
+    // Empty = stop-market (fires a market order). Set = stop-limit (fires a
+    // limit order at this price, which may rest if it cannot fill).
+    std::optional<Price> limit_price = std::nullopt;
 };
 
 std::string_view to_string(Side side);
