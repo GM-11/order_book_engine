@@ -49,92 +49,18 @@ MatchPlan Book::plan_match(const Order &incoming) const {
     if (incoming.side == Side::Buy) {
         walk_side(asks_, [&](Price price) {
             return incoming.type == OrderType::Market ||
-                   price <= incoming.price;
+                   price <= *incoming.price;
         });
     } else {
         walk_side(bids_, [&](Price price) {
             return incoming.type == OrderType::Market ||
-                   price >= incoming.price;
+                   price >= *incoming.price;
         });
     }
 
     return plan;
 }
 
-RejectReason Book::place_stop_order(StopOrder stop, Timestamp now) {
-    if (stop.quantity <= 0)
-        return RejectReason::InvalidQuantity;
-
-    if (stop.stop_price <= 0)
-        return RejectReason::InvalidPrice;
-
-    if (id_in_use(stop.id))
-        return RejectReason::DuplicateOrderId;
-
-    pending_stops_.push_back(stop);
-    emit({0, EventKind::StopAccepted, now, stop.id, 0, stop.owner_id, 0,
-          stop.side, stop.stop_price, stop.quantity});
-    return RejectReason::None;
-}
-
-bool Book::cancel_stop_order(OrderId order_id, Timestamp now) {
-    const auto it = std::find_if(
-        pending_stops_.begin(), pending_stops_.end(),
-        [order_id](const StopOrder &stop) { return stop.id == order_id; });
-    if (it == pending_stops_.end())
-        return false;
-
-    const StopOrder stop = *it;
-    pending_stops_.erase(it);
-    emit({0, EventKind::StopCancelled, now, stop.id, 0, stop.owner_id, 0,
-          stop.side, stop.stop_price, stop.quantity});
-    return true;
-}
-
-void Book::check_and_trigger_stops(Price low_trade_price,
-                                   Price high_trade_price, Timestamp now) {
-    if (halted_)
-        return; // don't fire anything while halted; stops stay dormant
-
-    // Queue triggered stops in entry order.
-    for (auto it = pending_stops_.begin(); it != pending_stops_.end();) {
-        const bool fires =
-            (it->side == Side::Sell && low_trade_price <= it->stop_price) ||
-            (it->side == Side::Buy && high_trade_price >= it->stop_price);
-
-        if (fires) {
-            triggered_stops_.push_back(*it);
-            it = pending_stops_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    // Nested cascades return; the outer FIFO drain preserves trigger order.
-    if (draining_stops_)
-        return;
-
-    draining_stops_ = true;
-    while (!triggered_stops_.empty()) {
-        if (halted_) {
-            // Unfired stops go back to dormant, still in trigger order, ahead
-            // of stops that never triggered.
-            pending_stops_.insert(pending_stops_.begin(),
-                                  triggered_stops_.begin(),
-                                  triggered_stops_.end());
-            triggered_stops_.clear();
-            break;
-        }
-        const StopOrder s = triggered_stops_.front();
-        triggered_stops_.pop_front();
-        emit({0, EventKind::StopTriggered, now, s.id, 0, s.owner_id, 0, s.side,
-              s.stop_price, s.quantity});
-        add_order(
-            {s.id, s.owner_id, s.side, OrderType::Market, 0, s.quantity, 0},
-            now);
-    }
-    draining_stops_ = false;
-}
 OrderResult Book::modify_order(OrderId order_id, Price new_price,
                                Quantity new_total_qty, Timestamp now) {
     const auto it = id_index_.find(order_id);
@@ -275,17 +201,17 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
                                         ? upper_band_price()
                                         : lower_band_price();
             incoming.price = incoming.side == Side::Buy
-                                 ? std::min(incoming.price, band_edge)
-                                 : std::max(incoming.price, band_edge);
+                                 ? std::min(*incoming.price, band_edge)
+                                 : std::max(*incoming.price, band_edge);
 
             if (validate_order_fields(incoming) == RejectReason::None) {
                 Node *node = node_pool_.acquire();
                 if (node != nullptr) {
                     node->order = incoming;
                     if (incoming.side == Side::Buy)
-                        get_or_create_level(bids_, incoming.price, node);
+                        get_or_create_level(bids_, *incoming.price, node);
                     else
-                        get_or_create_level(asks_, incoming.price, node);
+                        get_or_create_level(asks_, *incoming.price, node);
                     id_index_[incoming.id] = node;
                     emit({0, EventKind::Rested, now, incoming.id, 0,
                           incoming.owner_id, 0, incoming.side, incoming.price,
@@ -339,9 +265,9 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
             node->order = incoming;
 
             if (incoming.side == Side::Buy)
-                get_or_create_level(bids_, incoming.price, node);
+                get_or_create_level(bids_, *incoming.price, node);
             else
-                get_or_create_level(asks_, incoming.price, node);
+                get_or_create_level(asks_, *incoming.price, node);
 
             id_index_[incoming.id] = node;
             emit({0, EventKind::Rested, now, incoming.id, 0, incoming.owner_id,
@@ -363,6 +289,7 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
     if (!result.trades.empty()) {
         reference_price_ = result.trades.back().price;
         has_reference_price_ = true;
+        last_trade_price_ = result.trades.back().price;
 
         const auto [lo, hi] = std::minmax_element(
             result.trades.begin(), result.trades.end(),
@@ -387,8 +314,7 @@ RejectReason Book::cancel_order(OrderId order_id, Timestamp now) {
 
 bool Book::id_in_use(OrderId id) const {
     return id_index_.contains(id) || finished_orders_.contains(id) ||
-           std::any_of(pending_stops_.begin(), pending_stops_.end(),
-                       [id](const StopOrder &s) { return s.id == id; });
+           stop_index_.contains(id);
 }
 
 void Book::remove_resting(Node *node) {
