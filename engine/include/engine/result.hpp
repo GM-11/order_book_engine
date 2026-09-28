@@ -22,6 +22,9 @@ enum class RejectReason {
     // Market order stopped by its collar: no fills beyond
     // reference price +/- collar_bps.
     PriceCollar,
+    // Stop rejected on entry/modify: the last trade is already at or through
+    // its stop price, so it would fire immediately.
+    StopWouldTrigger,
 };
 
 struct OrderResult {
