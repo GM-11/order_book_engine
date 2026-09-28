@@ -57,7 +57,7 @@ TEST_CASE("Fills shrink level totals; empty levels disappear") {
     }
 
     SECTION("filling the whole level removes it") {
-        book.add_order({3, 3, Side::Buy, OrderType::Market, 0, 8}, 2);
+        book.add_order({3, 3, Side::Buy, OrderType::Market, std::nullopt, 8}, 2);
         CHECK(book.depth(10).asks.empty());
         CHECK(book.check_invariants());
     }
@@ -144,6 +144,7 @@ TEST_CASE("Random operation stream never breaks book invariants") {
 
     OrderId next_id = 1;
     std::vector<OrderId> ids;
+    std::vector<OrderId> stop_ids;
     Timestamp now = 0;
 
     for (int step = 0; step < 5000; ++step) {
@@ -160,7 +161,7 @@ TEST_CASE("Random operation stream never breaks book invariants") {
                            now);
             ids.push_back(id);
         } else if (op == 5) {
-            book.add_order({next_id++, owner, side, OrderType::Market, 0,
+            book.add_order({next_id++, owner, side, OrderType::Market, std::nullopt,
                             static_cast<Quantity>(pick(1, 15))},
                            now);
         } else if (op == 6 && !ids.empty()) {
@@ -171,10 +172,29 @@ TEST_CASE("Random operation stream never breaks book invariants") {
                               static_cast<Price>(pick(95, 105)),
                               static_cast<Quantity>(pick(1, 10)), now);
         } else if (op == 8) {
-            book.place_stop_order({next_id++, owner, side,
-                                   static_cast<Price>(pick(95, 105)),
-                                   static_cast<Quantity>(pick(1, 5))},
+            // Half stop-market, half stop-limit.
+            const OrderId id = next_id++;
+            const std::optional<Price> limit =
+                pick(0, 1) ? std::optional<Price>(pick(93, 107))
+                           : std::nullopt;
+            book.place_stop_order({id, owner, side,
+                                   static_cast<Price>(pick(88, 112)),
+                                   static_cast<Quantity>(pick(1, 5)), limit},
                                   now);
+            stop_ids.push_back(id);
+        } else if (op == 9 && !stop_ids.empty()) {
+            // Modify or cancel a stop: dormant, fired, cancelled or rejected
+            // at entry. Every outcome must leave the book consistent.
+            const OrderId id =
+                stop_ids[pick(0, static_cast<int>(stop_ids.size()) - 1)];
+            if (pick(0, 1))
+                book.cancel_stop_order(id, now);
+            else
+                book.modify_stop_order(
+                    id, static_cast<Price>(pick(88, 112)),
+                    pick(0, 1) ? std::optional<Price>(pick(93, 107))
+                               : std::nullopt,
+                    static_cast<Quantity>(pick(1, 5)), now);
         }
         book.drain_events();
 
