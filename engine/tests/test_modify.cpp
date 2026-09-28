@@ -167,14 +167,14 @@ TEST_CASE(
     "A reprice is rejected during a halt without losing its old position") {
     Book book(20, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
-    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 1}, 0);
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 95, 2}, 0);
     book.add_order({8, 8, Side::Buy, OrderType::Limit, 95, 1}, 0);
     book.add_order({4, 4, Side::Sell, OrderType::Limit, 120, 1}, 1);
-    REQUIRE(book.add_order({5, 5, Side::Buy, OrderType::Market, 0, 1}, 1)
+    REQUIRE(book.add_order({5, 5, Side::Buy, OrderType::Market, std::nullopt, 1}, 1)
                 .trades.size() == 1);
     book.add_order({6, 6, Side::Sell, OrderType::Limit, 150, 1}, 20);
-    REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, 0, 1}, 20)
+    REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, std::nullopt, 1}, 20)
                 .reject_reason == RejectReason::SymbolHalted);
 
     const auto rejected = book.modify_order(3, 96, 2, 30);
@@ -195,12 +195,12 @@ TEST_CASE(
 TEST_CASE("Reducing remaining quantity is permitted during a halt") {
     Book book(20, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
-    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 1}, 0);
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 95, 2}, 0);
     book.add_order({4, 4, Side::Sell, OrderType::Limit, 120, 1}, 1);
-    book.add_order({5, 5, Side::Buy, OrderType::Market, 0, 1}, 1);
+    book.add_order({5, 5, Side::Buy, OrderType::Market, std::nullopt, 1}, 1);
     book.add_order({6, 6, Side::Sell, OrderType::Limit, 150, 1}, 20);
-    REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, 0, 1}, 20)
+    REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, std::nullopt, 1}, 20)
                 .reject_reason == RejectReason::SymbolHalted);
     const auto reduced = book.modify_order(3, 95, 1, 30);
     CHECK(reduced.reject_reason == RejectReason::None);
@@ -266,7 +266,7 @@ TEST_CASE("Dormant stop ids are not eligible for limit-order modification") {
     book.place_stop_order({1, 1, Side::Sell, 500, 1}, 0);
     CHECK(book.modify_order(1, 501, 2, 0).reject_reason ==
           RejectReason::UnknownOrder);
-    CHECK(book.cancel_stop_order(1, 0));
+    CHECK(book.cancel_stop_order(1, 0) == RejectReason::None);
     expect_not_crossed(book);
 }
 
@@ -301,20 +301,20 @@ TEST_CASE("A crossing reprice triggers and executes an eligible dormant stop") {
     CHECK_FALSE(
         book.best_ask()
             .has_value()); // the stop's market buy consumed the other unit
-    CHECK_FALSE(book.cancel_stop_order(3, 0));
+    CHECK(book.cancel_stop_order(3, 0) == RejectReason::TooLate); // fired
     expect_not_crossed(book);
 }
 
 TEST_CASE("A reprice at halt expiry clears the stale halt state") {
     Book book(20, 1000, 10, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
-    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 1}, 0);
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 95, 2}, 0);
     book.add_order({4, 4, Side::Sell, OrderType::Limit, 120, 1}, 1);
-    REQUIRE(book.add_order({5, 5, Side::Buy, OrderType::Market, 0, 1}, 1)
+    REQUIRE(book.add_order({5, 5, Side::Buy, OrderType::Market, std::nullopt, 1}, 1)
                 .trades.size() == 1);
     book.add_order({6, 6, Side::Sell, OrderType::Limit, 150, 1}, 20);
-    REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, 0, 1}, 20)
+    REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, std::nullopt, 1}, 20)
                 .reject_reason ==
             RejectReason::SymbolHalted); // halt_until = 70
 
@@ -333,7 +333,7 @@ namespace {
 void seed_band_halt_sweep(Book &book) {
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
     const auto reference =
-        book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+        book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 1}, 0);
     REQUIRE(reference.trades.size() == 1); // reference = 100, band [90, 110]
     book.add_order({20, 20, Side::Sell, OrderType::Limit, 150, 1}, 1);
     book.add_order({21, 21, Side::Sell, OrderType::Limit, 160, 1}, 1);
@@ -403,7 +403,7 @@ TEST_CASE("A new bid rests its halt remainder at the upper band edge") {
 TEST_CASE("A sell remainder rests at the lower band edge when a halt trips") {
     Book book(10, 1000, 0, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
-    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 1}, 0);
     book.add_order({20, 20, Side::Buy, OrderType::Limit, 50, 1}, 1);
     book.add_order({21, 21, Side::Buy, OrderType::Limit, 40, 1}, 1);
 
@@ -428,7 +428,7 @@ TEST_CASE("A sell remainder rests at the lower band edge when a halt trips") {
 TEST_CASE("Band-edge prices round inward to whole ticks") {
     Book book(10, 1000, 0, 50);
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 101, 1}, 0);
-    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0);
+    book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 1}, 0);
     book.add_order({20, 20, Side::Sell, OrderType::Limit, 150, 1}, 1);
     book.add_order({21, 21, Side::Sell, OrderType::Limit, 160, 1}, 1);
 
@@ -447,7 +447,7 @@ TEST_CASE("A market order does not rest a remainder when a halt trips") {
     seed_band_halt_sweep(book);
 
     const auto result =
-        book.add_order({10, 10, Side::Buy, OrderType::Market, 0, 4}, 1);
+        book.add_order({10, 10, Side::Buy, OrderType::Market, std::nullopt, 4}, 1);
     REQUIRE(result.trades.size() == 1);
     CHECK(result.trades[0].price == 150);
     CHECK(result.unaccepted_quantity == 3);
