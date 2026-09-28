@@ -1,13 +1,13 @@
 # Order Book Engine
 
-A C++20 limit order book library with price-time priority, market orders, dormant stop orders, cancellation, bounded node allocation, and Cancel Newest self-trade prevention.
+A C++20 limit order book library with price-time priority, market orders, dormant stop and stop-limit orders, cancellation, bounded node allocation, and Cancel Newest self-trade prevention.
 
 ## Features
 
 - Price-time priority: bids are ordered highest-first; asks are ordered lowest-first.
 - Limit orders match crossing liquidity and rest when quantity remains.
 - Market orders consume available opposing liquidity and never rest.
-- Stop orders remain dormant until a trade price reaches their inclusive trigger.
+- Stop and stop-limit orders remain dormant until a trade price reaches their inclusive trigger.
 - Cancel Newest self-trade prevention rejects an incoming order's unmatched remainder when it reaches liquidity from the same owner.
 - A fixed-capacity node pool bounds the number of resting orders.
 - `OrderResult` reports fills, rejected quantity, and the rejection reason.
@@ -54,8 +54,8 @@ engine::OrderResult ask = book.add_order({
     engine::Side::Sell,
     engine::OrderType::Limit,
     10100,                // price in ticks/cents
-    10                     // quantity
-});
+    10                    // quantity
+}, 0);                    // timestamp
 
 // Buy 4 units. This executes at the resting ask price.
 engine::OrderResult buy = book.add_order({
@@ -65,7 +65,7 @@ engine::OrderResult buy = book.add_order({
     engine::OrderType::Limit,
     10100,
     4
-});
+}, 1);
 
 for (const engine::Trade& trade : buy.trades) {
     // trade.price == 10100; trade.quantity == 4
@@ -79,11 +79,12 @@ OrderId id;
 OwnerId owner_id;
 Side side;
 OrderType type;
-Price price;
+std::optional<Price> price;
 Quantity quantity;
+Quantity filled = 0;      // engine-maintained
 ```
 
-For market orders, `price` is unused and should conventionally be `0`.
+A limit order must carry a price. A market order has none: pass `std::nullopt`. A market order that carries a price is rejected with `InvalidPrice` rather than having the price silently ignored.
 
 ## Order results and rejections
 
@@ -97,7 +98,7 @@ struct OrderResult {
 };
 ```
 
-`RejectReason` can be `None`, `InvalidPrice`, `InvalidQuantity`, `SelfTrade`, `PoolExhausted`, `SymbolHalted`, `UnknownOrder`, or `DuplicateOrderId`.
+`RejectReason` can be `None`, `InvalidPrice`, `InvalidQuantity`, `SelfTrade`, `PoolExhausted`, `SymbolHalted`, `UnknownOrder`, `DuplicateOrderId`, `TooLate`, `PriceBand`, `PriceCollar`, or `StopWouldTrigger`.
 
 - A limit price must be positive.
 - Quantity must be positive.
@@ -112,15 +113,16 @@ The engine applies the **Cancel Newest** policy. While walking opposing liquidit
 
 ## Stop orders
 
-Stop orders are submitted separately and become market orders only when a trade triggers them:
+Stop orders are submitted separately and sit dormant until a trade reaches their stop price. A stop-market then fires a market order; a stop-limit fires a limit order at its limit price, which may rest if it cannot fill.
 
 ```cpp
 book.place_stop_order({
     3,                    // stop order ID
     99,                   // owner ID
     engine::Side::Sell,
-    9900,                // stop price
-    5
+    9900,                 // stop (trigger) price
+    5,                    // quantity
+    9850                  // optional limit price; omit for a stop-market
 }, 0);
 ```
 
@@ -128,10 +130,14 @@ book.place_stop_order({
 - A stop-buy triggers when the highest price traded in a match `>= stop_price`.
   (A single sweep can trade through several prices; a stop fires if any of them touches it.)
 - Trigger checks occur only after a real trade.
-- Triggered stops are removed from the dormant list and appended to a FIFO queue before their market orders are submitted, which prevents duplicate triggering.
-- Stops fire in the order they **triggered** (breadth-first). If stops A and B trigger on the same trade and A's fill then triggers C, the order is A, B, C: B triggered first, so it fires before C. Only the outermost call drains the queue; a triggered stop's own fills only append to it, so a long cascade never nests calls.
-- `cancel_stop_order(order_id, now)` cancels a dormant stop; `cancel_order(order_id, now)` cancels a resting limit order.
-- While the symbol is halted, stops are not checked. If a batch of triggered stops trips the halt part-way through, the stops that had not fired yet go back to the front of the dormant list. After the halt they are re-evaluated against post-halt trades like any other stop, so a stop can stay dormant if the market reopens on the other side of its stop price. This is a deliberate policy, pinned by a test; revisit it with the reopening auction.
+- **Entry check.** A stop whose trigger the last trade has already reached (sell: last `<=` stop, buy: last `>=` stop) is rejected with `StopWouldTrigger`, like Binance's "Order would trigger immediately". Before the first trade there is nothing to compare against, so any stop is accepted. The same check applies to `modify_stop_order`.
+- A triggered stop fires under its own id. A stop-limit that rests is an ordinary resting order from then on: cancel or modify it with `cancel_order` / `modify_order`.
+- `cancel_stop_order(id, now)` returns `None` if it cancelled a dormant stop, `TooLate` if that id was a stop that has already triggered or been cancelled, and `UnknownOrder` if no stop was ever placed with that id.
+- `modify_stop_order(id, new_stop_price, new_limit_price, new_qty, now)` replaces all three fields (an empty limit price makes it a stop-market). Same return rules as `cancel_stop_order`; on any rejection the stop is unchanged. Only a pure size reduction keeps the stop's place in the firing order; any other change moves it to the back.
+- **Firing order.** Stops woken by the same sweep fire in entry order, across both sides. Stops fire in the order they **triggered** (breadth-first): if stops A and B trigger on the same trade and A's fill then triggers C, the order is A, B, C. Only the outermost call drains the queue; a triggered stop's own fills only append to it, so a long cascade never nests calls.
+- While the symbol is halted, stops are not checked. If a batch of triggered stops trips the halt part-way through, the stops that had not fired yet go back to dormant, ahead of every stop that never triggered. After the halt they are re-evaluated against post-halt trades like any other stop, so a stop can stay dormant if the market reopens on the other side of its stop price. This is a deliberate policy, pinned by a test; revisit it with the reopening auction.
+
+**Storage.** Dormant stops live in two `std::map`s (one per side) keyed by `(stop price, priority)`, plus an id index. A trade touches only the stops it wakes: `O(log n + k log k)` for `k` woken stops out of `n`, instead of scanning all `n`. Duplicate-id checks, cancel and modify are `O(1)` lookups plus `O(log n)` map updates. The priority is the entry sequence; stops sent back by a halt get priorities from a second counter that counts down from the middle of the range, which puts them ahead of all other dormant stops.
 
 ## Price protection
 
@@ -150,6 +156,7 @@ Real LULD is stricter (no trades outside the band at all; a limit state, then a 
 - Every `Accepted` ends in exactly one outcome: filled by its own trades, `Rested`, or `Cancelled`.
 - A price change or size increase via `modify_order` emits `Replaced` (carrying the price and quantity that left the book), then `Accepted` for the new version. `Replaced` is not terminal; only `Cancelled` is.
 - `Halted` and `Resumed` are symbol-level. `Resumed` carries no order fields.
+- `price` is a `std::optional<Price>`: empty for a market order's `Accepted` / `Cancelled` and for `Resumed`. Stop events (`StopAccepted`, `StopModified`, `StopTriggered`, `StopCancelled`) carry the stop price in `price` and a stop-limit's limit in `limit_price`.
 
 ## Book queries
 
@@ -168,4 +175,10 @@ An empty optional means that side of the book has no resting liquidity.
 engine::Book book{1000};
 ```
 
-Only resting limit orders consume pool nodes. Stop orders are stored separately.
+Only resting limit orders consume pool nodes. Stop orders are stored separately. Each node is 80 bytes (the order, list links, and a pointer to its price level, which saves a map lookup on every fill and cancel).
+
+## Source layout
+
+- `engine/src/book.cpp`: order entry, matching, modify, cancel.
+- `engine/src/stops.cpp`: stop and stop-limit entry, cancel, modify, trigger and firing.
+- `engine/src/book_levels.cpp`: price levels (linking, totals), depth snapshots, validation helpers, `check_invariants`.
