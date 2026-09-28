@@ -18,7 +18,7 @@ TEST_CASE("Stop sells and buys fire inclusively and submit market orders") {
         REQUIRE(trigger.trades.size() == 1);
         CHECK(trigger.trades[0].price == 100);
         CHECK(book.best_bid() == 100);
-        const auto remainder = book.add_order({5, 15, Side::Sell, OrderType::Market, 0, 3}, 4);
+        const auto remainder = book.add_order({5, 15, Side::Sell, OrderType::Market, std::nullopt, 3}, 4);
         REQUIRE(remainder.trades.size() == 1);
         CHECK(remainder.trades[0].quantity == 1);
     }
@@ -34,7 +34,7 @@ TEST_CASE("Stop sells and buys fire inclusively and submit market orders") {
         REQUIRE(trigger.trades.size() == 1);
         CHECK(trigger.trades[0].price == 100);
         CHECK(book.best_ask() == 100);
-        const auto remainder = book.add_order({5, 15, Side::Buy, OrderType::Market, 0, 3}, 4);
+        const auto remainder = book.add_order({5, 15, Side::Buy, OrderType::Market, std::nullopt, 3}, 4);
         REQUIRE(remainder.trades.size() == 1);
         CHECK(remainder.trades[0].quantity == 1);
     }
@@ -52,8 +52,9 @@ TEST_CASE("Triggered stops can cascade and are removed before firing") {
     REQUIRE(trigger.trades.size() == 1);
     CHECK(trigger.trades[0].price == 100);
     CHECK_FALSE(book.best_bid().has_value());
-    CHECK_FALSE(book.cancel_stop_order(3, 0));
-    CHECK_FALSE(book.cancel_stop_order(4, 0));
+    // Both already fired: too late, not unknown.
+    CHECK(book.cancel_stop_order(3, 0) == RejectReason::TooLate);
+    CHECK(book.cancel_stop_order(4, 0) == RejectReason::TooLate);
 }
 
 TEST_CASE("Cancelling a dormant stop prevents it from firing") {
@@ -61,10 +62,10 @@ TEST_CASE("Cancelling a dormant stop prevents it from firing") {
     book.add_order({1, 11, Side::Buy, OrderType::Limit, 100, 1}, 1);
     book.add_order({2, 12, Side::Buy, OrderType::Limit, 100, 3}, 2);
     book.place_stop_order({3, 13, Side::Sell, 100, 2}, 0);
-    CHECK(book.cancel_stop_order(3, 0));
+    CHECK(book.cancel_stop_order(3, 0) == RejectReason::None);
 
     book.add_order({4, 14, Side::Sell, OrderType::Limit, 100, 1}, 3);
-    const auto remainder = book.add_order({5, 15, Side::Sell, OrderType::Market, 0, 3}, 4);
+    const auto remainder = book.add_order({5, 15, Side::Sell, OrderType::Market, std::nullopt, 3}, 4);
 
     REQUIRE(remainder.trades.size() == 1);
     CHECK(remainder.trades[0].quantity == 3);
@@ -75,7 +76,7 @@ TEST_CASE("Stop cancellation does not consume resting-order pool capacity") {
     book.add_order({1, 11, Side::Buy, OrderType::Limit, 90, 1}, 1);
     book.place_stop_order({2, 12, Side::Sell, 80, 1}, 0);
 
-    CHECK(book.cancel_stop_order(2, 0));
+    CHECK(book.cancel_stop_order(2, 0) == RejectReason::None);
     CHECK(book.cancel_order(1, 0) == RejectReason::None);
     const auto replacement = book.add_order({3, 13, Side::Buy, OrderType::Limit, 90, 1}, 2);
     CHECK(replacement.reject_reason == RejectReason::None);
@@ -136,7 +137,7 @@ TEST_CASE("Triggered stops fire in trigger order, not depth-first") {
 
     // Trade at 100 triggers S1 and S2 together. S1's fill at 99 then
     // triggers S3 -- later than S2, so S3 must fire after S2.
-    book.add_order({60, 2, Side::Sell, OrderType::Market, 0, 1}, 1);
+    book.add_order({60, 2, Side::Sell, OrderType::Market, std::nullopt, 1}, 1);
 
     std::vector<OrderId> triggered;
     std::vector<std::pair<OrderId, Price>> fills;
@@ -144,7 +145,7 @@ TEST_CASE("Triggered stops fire in trigger order, not depth-first") {
         if (e.kind == EventKind::StopTriggered)
             triggered.push_back(e.order_id);
         if (e.kind == EventKind::Trade)
-            fills.push_back({e.order_id, e.price});
+            fills.push_back({e.order_id, *e.price});
     }
     CHECK(triggered == std::vector<OrderId>{50, 51, 52});
     CHECK(fills == std::vector<std::pair<OrderId, Price>>{
@@ -166,7 +167,7 @@ TEST_CASE("A long stop cascade fires every stop, one level each") {
             {static_cast<OrderId>(100000 + i), 2, Side::Sell, 10000 - i, 1},
             0);
 
-    REQUIRE(book.add_order({900000, 3, Side::Sell, OrderType::Market, 0, 1}, 1)
+    REQUIRE(book.add_order({900000, 3, Side::Sell, OrderType::Market, std::nullopt, 1}, 1)
                 .trades.size() == 1);
     // The market sell took 10000, the stops took 9999 .. 10000-n.
     CHECK(book.best_bid() == 10000 - n - 1);

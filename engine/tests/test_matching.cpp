@@ -84,7 +84,7 @@ TEST_CASE("A market order consumes liquidity without resting its excess") {
     book.add_order({2, 20, Side::Sell, OrderType::Limit, 101, 3}, 2);
 
     const auto result =
-        book.add_order({3, 30, Side::Buy, OrderType::Market, 0, 8}, 3);
+        book.add_order({3, 30, Side::Buy, OrderType::Market, std::nullopt, 8}, 3);
 
     REQUIRE(result.trades.size() == 2);
     CHECK(result.trades[0].quantity == 2);
@@ -104,7 +104,7 @@ TEST_CASE("Invalid limit prices and quantities are rejected before matching") {
               .reject_reason == RejectReason::InvalidPrice);
     CHECK(book.add_order({3, 1, Side::Buy, OrderType::Limit, 100, 0}, 3)
               .reject_reason == RejectReason::InvalidQuantity);
-    CHECK(book.add_order({4, 1, Side::Buy, OrderType::Market, 0, -1}, 4)
+    CHECK(book.add_order({4, 1, Side::Buy, OrderType::Market, std::nullopt, -1}, 4)
               .reject_reason == RejectReason::InvalidQuantity);
 }
 

@@ -41,7 +41,8 @@ TEST_CASE("Stop ids share the id space with resting orders") {
         book.add_order({1, 11, Side::Buy, OrderType::Limit, 100, 1}, 1);
         CHECK(book.place_stop_order({1, 22, Side::Sell, 90, 1}, 2) ==
               RejectReason::DuplicateOrderId);
-        CHECK_FALSE(book.cancel_stop_order(1, 3));
+        // id 1 is a resting limit, never a stop.
+        CHECK(book.cancel_stop_order(1, 3) == RejectReason::UnknownOrder);
     }
 
     SECTION("order cannot reuse a dormant stop id") {

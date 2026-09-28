@@ -33,7 +33,7 @@ TEST_CASE("One market order cannot sweep past its first out-of-band level") {
     thin_ask_ladder(book);
 
     const auto r =
-        book.add_order({20, 4, Side::Buy, OrderType::Market, 0, 4}, 5);
+        book.add_order({20, 4, Side::Buy, OrderType::Market, std::nullopt, 4}, 5);
 
     // 100 is in band; 150 is the one allowed breach print; 300 and 1000 are
     // never touched.
@@ -87,7 +87,7 @@ TEST_CASE("The sweep limit lets the whole breach level trade, several orders "
     book.add_order({12, 6, Side::Sell, OrderType::Limit, 200, 1}, 1);
 
     const auto r =
-        book.add_order({20, 4, Side::Buy, OrderType::Market, 0, 6}, 5);
+        book.add_order({20, 4, Side::Buy, OrderType::Market, std::nullopt, 6}, 5);
 
     // Both orders at 150 fill (same level); 200 is a further level.
     REQUIRE(r.trades.size() == 2);
@@ -108,7 +108,7 @@ TEST_CASE("The sweep limit also applies to a sell walking down the bids") {
     book.add_order({12, 3, Side::Buy, OrderType::Limit, 10, 1}, 1);
 
     const auto r =
-        book.add_order({20, 4, Side::Sell, OrderType::Market, 0, 3}, 5);
+        book.add_order({20, 4, Side::Sell, OrderType::Market, std::nullopt, 3}, 5);
 
     REQUIRE(r.trades.size() == 2);
     CHECK(r.trades[0].price == 95);
@@ -128,7 +128,7 @@ TEST_CASE("Market collar stops a market order at reference +/- collar") {
     book.drain_events();
 
     const auto r =
-        book.add_order({20, 4, Side::Buy, OrderType::Market, 0, 2}, 2);
+        book.add_order({20, 4, Side::Buy, OrderType::Market, std::nullopt, 2}, 2);
 
     REQUIRE(r.trades.size() == 1);
     CHECK(r.trades[0].price == 104);
@@ -149,7 +149,7 @@ TEST_CASE("Market collar does not apply to limit orders or before the first "
     Book book(1000, 1000, 2000, 30000, 500);
     // No reference yet: a market order is not collared.
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
-    REQUIRE(book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0)
+    REQUIRE(book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 1}, 0)
                 .trades.size() == 1);
 
     // Reference 100. A limit buy at 106 is the trader's own price bound; the

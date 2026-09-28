@@ -113,7 +113,7 @@ TEST_CASE("Stop cancellation emits its lifecycle event") {
             RejectReason::None);
     book.drain_events();
 
-    REQUIRE(book.cancel_stop_order(1, 6));
+    REQUIRE(book.cancel_stop_order(1, 6) == RejectReason::None);
     const auto events = book.drain_events();
     REQUIRE(events.size() == 1);
     CHECK(events[0].kind == EventKind::StopCancelled);
@@ -168,10 +168,10 @@ TEST_CASE("Mixed event streams use contiguous sequence numbers") {
     book.cancel_order(3, 3);
 
     book.add_order({4, 40, Side::Sell, OrderType::Limit, 120, 1}, 4);
-    book.add_order({5, 50, Side::Buy, OrderType::Market, 0, 1}, 4);
+    book.add_order({5, 50, Side::Buy, OrderType::Market, std::nullopt, 1}, 4);
     book.add_order({6, 60, Side::Sell, OrderType::Limit, 150, 1}, 20);
     const auto halted =
-        book.add_order({7, 70, Side::Buy, OrderType::Market, 0, 1}, 20);
+        book.add_order({7, 70, Side::Buy, OrderType::Market, std::nullopt, 1}, 20);
     REQUIRE(halted.reject_reason == RejectReason::SymbolHalted);
 
     const auto events = book.drain_events();
@@ -250,7 +250,7 @@ TEST_CASE("Resumed is a symbol-level event with no order fields") {
     book.add_order({2, 22, Side::Sell, OrderType::Limit, 100, 1}, 1);
     book.add_order({3, 33, Side::Sell, OrderType::Limit, 120, 1}, 2);
     book.add_order({4, 44, Side::Sell, OrderType::Limit, 130, 1}, 2);
-    book.add_order({5, 55, Side::Buy, OrderType::Market, 0, 2}, 3);
+    book.add_order({5, 55, Side::Buy, OrderType::Market, std::nullopt, 2}, 3);
     book.drain_events();
 
     book.add_order({6, 66, Side::Buy, OrderType::Limit, 90, 1}, 100);

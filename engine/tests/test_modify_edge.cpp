@@ -164,13 +164,13 @@ TEST_CASE("Finished order ids cannot be reused") {
 TEST_CASE("Modify below filled cancels the rest even during a halt") {
     Book book(20, 1000, 10, 50); // 10% band, 10ms grace, 50ms halt
     book.add_order({1, 1, Side::Sell, OrderType::Limit, 100, 1}, 0);
-    book.add_order({2, 2, Side::Buy, OrderType::Market, 0, 1}, 0); // ref 100
+    book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 1}, 0); // ref 100
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 95, 2}, 0);
     book.add_order({9, 9, Side::Sell, OrderType::Limit, 95, 1}, 0); // #3: 1 filled
     book.add_order({4, 4, Side::Sell, OrderType::Limit, 120, 1}, 1);
-    book.add_order({5, 5, Side::Buy, OrderType::Market, 0, 1}, 1); // breach 1
+    book.add_order({5, 5, Side::Buy, OrderType::Market, std::nullopt, 1}, 1); // breach 1
     book.add_order({6, 6, Side::Sell, OrderType::Limit, 150, 1}, 20);
-    REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, 0, 1}, 20)
+    REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, std::nullopt, 1}, 20)
                 .reject_reason == RejectReason::SymbolHalted); // until 70
 
     // Total 1, already filled 1 -> cancel the rest. A cancel only reduces

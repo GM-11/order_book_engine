@@ -69,7 +69,7 @@ TEST_CASE("A reacquired node carries no stale links or order data") {
     CHECK(again->prev == nullptr);
     CHECK(again->order.id == 0);
     CHECK(again->order.quantity == 0);
-    CHECK(again->order.price == 0);
+    CHECK_FALSE(again->order.price.has_value());
 }
 
 TEST_CASE("Release and reacquire cycles never lose or duplicate nodes") {
