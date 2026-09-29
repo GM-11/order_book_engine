@@ -47,25 +47,19 @@ struct DepthSnapshot {
 
 class Book {
   public:
-    explicit Book(std::size_t pool_capacity = 100000,
-                  std::int64_t band_bps = 1000,
-                  Timestamp grace_period_ms = 2000,
+    explicit Book(std::size_t pool_capacity = 100000, std::int64_t band_bps = 1000, Timestamp grace_period_ms = 2000,
                   Timestamp halt_duration_ms = 30000,
                   std::int64_t market_collar_bps = 0) // 0 = no collar
-        : node_pool_(pool_capacity), next_trade_id_(1), band_bps_(band_bps),
-          grace_period_ms_(grace_period_ms),
-          halt_duration_ms_(halt_duration_ms),
-          market_collar_bps_(market_collar_bps) {
+        : node_pool_(pool_capacity), next_trade_id_(1), band_bps_(band_bps), grace_period_ms_(grace_period_ms),
+          halt_duration_ms_(halt_duration_ms), market_collar_bps_(market_collar_bps) {
         if (band_bps_ <= 0 || band_bps_ >= 10000)
             throw std::invalid_argument("band_bps must be in (0, 10000)");
         if (market_collar_bps_ < 0 || market_collar_bps_ >= 10000)
-            throw std::invalid_argument(
-                "market_collar_bps must be in [0, 10000)");
+            throw std::invalid_argument("market_collar_bps must be in [0, 10000)");
     }
 
     OrderResult add_order(Order order, Timestamp now);
-    OrderResult modify_order(OrderId order_id, Price new_price,
-                             Quantity new_qty, Timestamp now);
+    OrderResult modify_order(OrderId order_id, Price new_price, Quantity new_qty, Timestamp now);
     RejectReason cancel_order(OrderId order_id, Timestamp now);
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
@@ -87,12 +81,9 @@ class Book {
     // in the firing order; anything else moves it to the back. Same
     // None/TooLate/UnknownOrder rules as cancel_stop_order; on any reject the
     // stop is left unchanged.
-    RejectReason modify_stop_order(OrderId order_id, Price new_stop_price,
-                                   std::optional<Price> new_limit_price,
+    RejectReason modify_stop_order(OrderId order_id, Price new_stop_price, std::optional<Price> new_limit_price,
                                    Quantity new_qty, Timestamp now);
-    std::vector<EngineEvent> drain_events() {
-        return std::exchange(events_, {});
-    }
+    std::vector<EngineEvent> drain_events() { return std::exchange(events_, {}); }
 
     bool within_band(Price p) const {
         if (!has_reference_price_)
@@ -123,13 +114,10 @@ class Book {
     // A resting order got smaller but stays in the book (partial fill,
     // in-place modify). Keeps Level::total_quantity equal to the real sum.
     void reduce_resting(Node *node, Quantity by);
-    void check_and_trigger_stops(Price low_trade_price, Price high_trade_price,
-                                 Timestamp now);
+    void check_and_trigger_stops(Price low_trade_price, Price high_trade_price, Timestamp now);
     void unlink_and_maybe_erase_level(Node *node);
-    template <typename SideMap>
-    void unlink_and_maybe_erase_from_level(SideMap &side_map, Node *node);
-    template <typename SideMap>
-    void get_or_create_level(SideMap &side_map, Price price, Node *node);
+    template <typename SideMap> void unlink_and_maybe_erase_from_level(SideMap &side_map, Node *node);
+    template <typename SideMap> void get_or_create_level(SideMap &side_map, Price price, Node *node);
 
     std::map<Price, Level, std::greater<Price>> bids_;
     std::map<Price, Level> asks_;
@@ -158,9 +146,7 @@ class Book {
     std::uint64_t next_back_priority_ = kPriorityMid;
     std::uint64_t next_front_priority_ = kPriorityMid - 1;
     void insert_dormant_stop(const StopOrder &stop, std::uint64_t priority);
-    std::map<StopKey, StopOrder> &stops_for(Side side) {
-        return side == Side::Sell ? sell_stops_ : buy_stops_;
-    }
+    std::map<StopKey, StopOrder> &stops_for(Side side) { return side == Side::Sell ? sell_stops_ : buy_stops_; }
     bool would_trigger_now(Side side, Price stop_price) const;
     // Why a cancel/modify found no dormant stop: TooLate or UnknownOrder.
     RejectReason stop_gone_reason(OrderId id) const;
@@ -176,8 +162,7 @@ class Book {
     SequenceNumber next_seq_ = 1;
     void emit(EngineEvent e) {
         e.sequence_number = next_seq_++;
-        if (e.kind == EventKind::Cancelled ||
-            e.kind == EventKind::StopCancelled)
+        if (e.kind == EventKind::Cancelled || e.kind == EventKind::StopCancelled)
             finished_orders_[e.order_id] = FinalState::Cancelled;
         events_.push_back(e);
     }

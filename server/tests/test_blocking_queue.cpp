@@ -22,8 +22,7 @@ static_assert(!std::is_copy_constructible_v<BlockingQueue<int>>);
 static_assert(!std::is_copy_assignable_v<BlockingQueue<int>>);
 static_assert(!std::is_move_constructible_v<BlockingQueue<int>>);
 
-TEST_CASE("single thread: items come out in the order they went in",
-          "[queue]") {
+TEST_CASE("single thread: items come out in the order they went in", "[queue]") {
     BlockingQueue<int> q;
     q.push(1);
     q.push(2);
@@ -35,8 +34,7 @@ TEST_CASE("single thread: items come out in the order they went in",
     REQUIRE(q.size() == 0);
 }
 
-TEST_CASE("try_pop on an empty queue returns nothing and does not block",
-          "[queue]") {
+TEST_CASE("try_pop on an empty queue returns nothing and does not block", "[queue]") {
     BlockingQueue<int> q;
     REQUIRE_FALSE(q.try_pop().has_value());
     q.push(7);
@@ -115,8 +113,7 @@ TEST_CASE("many producers, one consumer: nothing lost, nothing duplicated, "
     REQUIRE(q.size() == 0);
 }
 
-TEST_CASE("two consumers: every item is delivered exactly once",
-          "[queue][threads]") {
+TEST_CASE("two consumers: every item is delivered exactly once", "[queue][threads]") {
     constexpr int kItems = 100'000;
     constexpr int kDone = -1; // one "stop" marker per consumer (poison pill)
 

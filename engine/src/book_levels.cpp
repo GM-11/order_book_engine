@@ -13,8 +13,7 @@ void Book::unlink_and_maybe_erase_level(Node *node) {
         unlink_and_maybe_erase_from_level(asks_, node);
 }
 
-template <typename SideMap>
-void Book::unlink_and_maybe_erase_from_level(SideMap &side_map, Node *node) {
+template <typename SideMap> void Book::unlink_and_maybe_erase_from_level(SideMap &side_map, Node *node) {
     if (node->prev)
         node->prev->next = node->next;
     if (node->next)
@@ -35,8 +34,7 @@ void Book::unlink_and_maybe_erase_from_level(SideMap &side_map, Node *node) {
         side_map.erase(Price{level.price}); // copy: the key dies with it
 }
 
-template <typename SideMap>
-void Book::get_or_create_level(SideMap &side_map, Price price, Node *node) {
+template <typename SideMap> void Book::get_or_create_level(SideMap &side_map, Price price, Node *node) {
     auto it = side_map.find(price);
     if (it == side_map.end()) {
         it = side_map.insert({price, Level{price, nullptr, nullptr}}).first;
@@ -55,11 +53,8 @@ void Book::get_or_create_level(SideMap &side_map, Price price, Node *node) {
     node->level = &level;
 }
 
-template void
-Book::get_or_create_level(std::map<Price, Level, std::greater<Price>> &, Price,
-                          Node *);
-template void Book::get_or_create_level(std::map<Price, Level> &, Price,
-                                        Node *);
+template void Book::get_or_create_level(std::map<Price, Level, std::greater<Price>> &, Price, Node *);
+template void Book::get_or_create_level(std::map<Price, Level> &, Price, Node *);
 
 Price Book::lower_limit(std::int64_t bps) const {
     const std::int64_t product = reference_price_ * (10000 - bps);
@@ -100,8 +95,7 @@ RejectReason Book::validate_new_order(const Order &order, Timestamp now) {
 
         halted_ = false;
         outside_band_since_.reset();
-        emit({0, EventKind::Resumed, now, 0, 0, 0, 0, Side::Buy, std::nullopt,
-              0});
+        emit({0, EventKind::Resumed, now, 0, 0, 0, 0, Side::Buy, std::nullopt, 0});
     }
     return validate_order_fields(order);
 }
@@ -117,8 +111,7 @@ DepthSnapshot Book::depth(std::size_t max_levels) const {
     DepthSnapshot snap;
     snap.as_of_sequence = next_seq_ - 1;
 
-    auto collect = [max_levels](const auto &side_map,
-                                std::vector<DepthLevel> &out) {
+    auto collect = [max_levels](const auto &side_map, std::vector<DepthLevel> &out) {
         out.reserve(std::min(max_levels, side_map.size()));
         for (const auto &[price, level] : side_map) {
             if (out.size() == max_levels)
@@ -148,8 +141,7 @@ bool Book::check_invariants() const {
             for (const Node *n = level.head; n; n = n->next) {
                 if (n->prev != prev) // links agree in both directions
                     return false;
-                if (n->order.price != price || n->order.side != side ||
-                    n->order.quantity <= 0 || n->level != &level)
+                if (n->order.price != price || n->order.side != side || n->order.quantity <= 0 || n->level != &level)
                     return false;
                 const auto it = id_index_.find(n->order.id);
                 if (it == id_index_.end() || it->second != n)
@@ -174,20 +166,17 @@ bool Book::check_invariants() const {
     if (resting != id_index_.size())
         return false;
     // Never crossed.
-    if (!bids_.empty() && !asks_.empty() &&
-        bids_.begin()->first >= asks_.begin()->first)
+    if (!bids_.empty() && !asks_.empty() && bids_.begin()->first >= asks_.begin()->first)
         return false;
 
     // Dormant stops: each sits under its own stop price on its own side, and
     // the id index points at exactly the stored ones.
     auto stops_ok = [&](const auto &stop_map, Side side) {
         for (const auto &[key, stop] : stop_map) {
-            if (stop.side != side || key.first != stop.stop_price ||
-                stop.quantity <= 0)
+            if (stop.side != side || key.first != stop.stop_price || stop.quantity <= 0)
                 return false;
             const auto it = stop_index_.find(stop.id);
-            if (it == stop_index_.end() || it->second.side != side ||
-                it->second.key != key)
+            if (it == stop_index_.end() || it->second.side != side || it->second.key != key)
                 return false;
         }
         return true;

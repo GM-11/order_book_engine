@@ -53,8 +53,7 @@ struct ModifyStop {
 
 struct Shutdown {};
 
-using Command = std::variant<NewOrder, CancelOrder, ModifyOrder, PlaceStop,
-                             CancelStop, ModifyStop, Shutdown>;
+using Command = std::variant<NewOrder, CancelOrder, ModifyOrder, PlaceStop, CancelStop, ModifyStop, Shutdown>;
 
 struct MarketEvent {
     SymbolId symbol;

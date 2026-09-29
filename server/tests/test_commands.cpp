@@ -18,8 +18,7 @@ static_assert(std::is_nothrow_move_constructible_v<Output>);
 // Shutdown is addressed to a worker, not a book: it carries nothing.
 static_assert(std::is_empty_v<Shutdown>);
 
-TEST_CASE("commands survive a trip through the queue with their alternative intact",
-          "[commands]") {
+TEST_CASE("commands survive a trip through the queue with their alternative intact", "[commands]") {
     BlockingQueue<Command> q;
     engine::Order o{};
     o.id = 7;
@@ -35,7 +34,7 @@ TEST_CASE("commands survive a trip through the queue with their alternative inta
 
     Command a = q.pop();
     REQUIRE(std::holds_alternative<NewOrder>(a));
-    const auto& n = std::get<NewOrder>(a);
+    const auto &n = std::get<NewOrder>(a);
     REQUIRE(n.request_id == 1);
     REQUIRE(n.symbol == 42);
     REQUIRE(n.order.id == 7);
@@ -51,17 +50,24 @@ TEST_CASE("commands survive a trip through the queue with their alternative inta
 TEST_CASE("std::visit reaches the right handler for each command", "[commands]") {
     // The worker will dispatch this way; make sure every alternative is
     // distinguishable (no two commands collapse into the same type).
-    auto name = [](const Command& c) {
+    auto name = [](const Command &c) {
         return std::visit(
-            [](const auto& cmd) -> int {
+            [](const auto &cmd) -> int {
                 using T = std::decay_t<decltype(cmd)>;
-                if constexpr (std::is_same_v<T, NewOrder>) return 0;
-                else if constexpr (std::is_same_v<T, CancelOrder>) return 1;
-                else if constexpr (std::is_same_v<T, ModifyOrder>) return 2;
-                else if constexpr (std::is_same_v<T, PlaceStop>) return 3;
-                else if constexpr (std::is_same_v<T, CancelStop>) return 4;
-                else if constexpr (std::is_same_v<T, ModifyStop>) return 5;
-                else return 6;
+                if constexpr (std::is_same_v<T, NewOrder>)
+                    return 0;
+                else if constexpr (std::is_same_v<T, CancelOrder>)
+                    return 1;
+                else if constexpr (std::is_same_v<T, ModifyOrder>)
+                    return 2;
+                else if constexpr (std::is_same_v<T, PlaceStop>)
+                    return 3;
+                else if constexpr (std::is_same_v<T, CancelStop>)
+                    return 4;
+                else if constexpr (std::is_same_v<T, ModifyStop>)
+                    return 5;
+                else
+                    return 6;
             },
             c);
     };
