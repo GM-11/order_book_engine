@@ -17,9 +17,15 @@ list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 
 add_executable(server_tests
     test_blocking_queue.cpp
+    test_commands.cpp
+    test_worker.cpp
 )
 target_link_libraries(server_tests PRIVATE server_core Catch2::Catch2WithMain)
 target_compile_options(server_tests PRIVATE -Wall -Wextra -Wpedantic)
 
 include(Catch)
-catch_discover_tests(server_tests)
+# PRE_TEST: list the tests when ctest runs, not right after linking. A
+# ThreadSanitizer build can crash at startup on some kernels (high ASLR
+# entropy; run it via `setarch $(uname -m) -R`),
+# and POST_BUILD discovery would turn that into a build failure.
+catch_discover_tests(server_tests DISCOVERY_MODE PRE_TEST)
