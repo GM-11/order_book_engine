@@ -19,6 +19,7 @@ add_executable(server_tests
     test_blocking_queue.cpp
     test_commands.cpp
     test_worker.cpp
+    test_router.cpp
 )
 target_link_libraries(server_tests PRIVATE server_core Catch2::Catch2WithMain)
 target_compile_options(server_tests PRIVATE -Wall -Wextra -Wpedantic)
