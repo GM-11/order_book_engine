@@ -306,3 +306,21 @@ TEST_CASE("two workers, four symbols, four producer threads: every command "
     REQUIRE(next_seq.size() == 4);
     REQUIRE(trades > 0);  // the load actually exercised matching
 }
+
+TEST_CASE("stop() drains, joins, and is safe to call again or before start",
+          "[worker]") {
+    BlockingQueue<Output> out;
+    Worker idle(out, fixed_clock(0));
+    idle.stop();  // never started: no-op
+
+    Worker w(out, fixed_clock(0));
+    w.add_book(1, std::make_unique<engine::Book>());
+    w.start();
+    for (int i = 0; i < 500; ++i)
+        w.submit(NewOrder{static_cast<RequestId>(i + 1), 1,
+                          limit(i + 1, 1, engine::Side::Buy, 100, 1)});
+    w.stop();  // returns only after all 500 are processed
+    REQUIRE(replies_of(drain(out)).size() == 500);
+    w.stop();  // second call: no second pill, no second join
+    REQUIRE(drain(out).empty());
+}
