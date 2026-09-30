@@ -107,6 +107,15 @@ struct OrderResult {
 - If self-trade prevention stops matching, already-executed trades are retained and the unmatched amount is returned with `SelfTrade`.
 - On the normal accepted path for a limit order, `unaccepted_quantity` is `0`; any unfilled quantity has been placed on the book. For a market order, quantity with no liquidity left is cancelled and reported in `unaccepted_quantity` (with `RejectReason::None`, since cancelling the rest is not a rejection).
 
+## Order ownership
+
+`cancel_order`, `modify_order`, `cancel_stop_order` and `modify_stop_order` all take the id of the account making the request, right after the order id (e.g. `cancel_order(id, requester, now)`). The engine records the owner of every id when it is accepted (`Accepted` / `StopAccepted`) and keeps it for the session.
+
+- Only the owner may cancel or modify an order or stop.
+- Anyone else gets `UnknownOrder`, exactly as if the id had never existed. That includes finished orders: `TooLate` is only ever told to the owner, so a reply never reveals whether another account's order exists, rests, filled or was cancelled.
+- The ownership check runs before any other validation, so a non-owner's malformed modify still gets `UnknownOrder`, not `InvalidQuantity`.
+- The requester id must come from the authenticated connection (the gateway), never from the client's message. Real venues go further and scope order ids per account (FIX `ClOrdID`, Nasdaq OUCH order tokens), so another account's order cannot even be named; this engine check is the backstop behind that.
+
 ## Self-trade prevention
 
 The engine applies the **Cancel Newest** policy. While walking opposing liquidity, if the incoming order encounters a resting order with the same `owner_id`, matching stops immediately. The resting order stays untouched and preserves its queue position. Any quantity not already executed is rejected with `RejectReason::SelfTrade`; it does not rest on the book.
@@ -132,8 +141,8 @@ book.place_stop_order({
 - Trigger checks occur only after a real trade.
 - **Entry check.** A stop whose trigger the last trade has already reached (sell: last `<=` stop, buy: last `>=` stop) is rejected with `StopWouldTrigger`, like Binance's "Order would trigger immediately". Before the first trade there is nothing to compare against, so any stop is accepted. The same check applies to `modify_stop_order`.
 - A triggered stop fires under its own id. A stop-limit that rests is an ordinary resting order from then on: cancel or modify it with `cancel_order` / `modify_order`.
-- `cancel_stop_order(id, now)` returns `None` if it cancelled a dormant stop, `TooLate` if that id was a stop that has already triggered or been cancelled, and `UnknownOrder` if no stop was ever placed with that id.
-- `modify_stop_order(id, new_stop_price, new_limit_price, new_qty, now)` replaces all three fields (an empty limit price makes it a stop-market). Same return rules as `cancel_stop_order`; on any rejection the stop is unchanged. Only a pure size reduction keeps the stop's place in the firing order; any other change moves it to the back.
+- `cancel_stop_order(id, requester, now)` returns `None` if it cancelled a dormant stop, `TooLate` if that id was a stop that has already triggered or been cancelled, and `UnknownOrder` if no stop was ever placed with that id (or the requester is not its owner, see Order ownership).
+- `modify_stop_order(id, requester, new_stop_price, new_limit_price, new_qty, now)` replaces all three fields (an empty limit price makes it a stop-market). Same return rules as `cancel_stop_order`; on any rejection the stop is unchanged. Only a pure size reduction keeps the stop's place in the firing order; any other change moves it to the back.
 - **Firing order.** Stops woken by the same sweep fire in entry order, across both sides. Stops fire in the order they **triggered** (breadth-first): if stops A and B trigger on the same trade and A's fill then triggers C, the order is A, B, C. Only the outermost call drains the queue; a triggered stop's own fills only append to it, so a long cascade never nests calls.
 - While the symbol is halted, stops are not checked. If a batch of triggered stops trips the halt part-way through, the stops that had not fired yet go back to dormant, ahead of every stop that never triggered. After the halt they are re-evaluated against post-halt trades like any other stop, so a stop can stay dormant if the market reopens on the other side of its stop price. This is a deliberate policy, pinned by a test; revisit it with the reopening auction.
 
