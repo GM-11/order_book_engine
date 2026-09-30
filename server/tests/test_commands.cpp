@@ -29,7 +29,7 @@ TEST_CASE("commands survive a trip through the queue with their alternative inta
     o.quantity = 10;
 
     q.push(NewOrder{1, 42, o});
-    q.push(CancelOrder{2, 42, 7});
+    q.push(CancelOrder{.request_id = 2, .symbol = 42, .requester = 1, .order_id = 7});
     q.push(Shutdown{});
 
     Command a = q.pop();

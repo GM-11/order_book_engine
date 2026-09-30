@@ -293,3 +293,27 @@ TEST_CASE("three workers, six symbols, four producer threads through the "
     REQUIRE(next_seq.size() == 6);
     REQUIRE(trades > 0);
 }
+
+// ------------------------------------------------------------------ ownership
+
+TEST_CASE("through the router, one trader cannot cancel another trader's "
+          "resting order", "[router]") {
+    Router r(1, fixed_clock(0));
+    r.add_symbol(1, 0, std::make_unique<engine::Book>());
+    r.start();
+    r.submit(NewOrder{1, 1, limit(1, /*owner*/ 1, engine::Side::Sell, 100, 10)});
+    r.submit(CancelOrder{.request_id = 2, .symbol = 1, .requester = 2, .order_id = 1});
+    r.submit(CancelOrder{.request_id = 3, .symbol = 1, .requester = 1, .order_id = 1});
+    r.shutdown();
+
+    auto all = drain(r.outbox());
+    std::map<RequestId, RejectReason> reason;
+    for (auto& rep : replies_of(all)) reason[rep.request_id] = rep.reject_reason;
+    REQUIRE(reason.at(2) == RejectReason::UnknownOrder); // trader 2: refused
+    REQUIRE(reason.at(3) == RejectReason::None);         // trader 1: cancelled
+
+    int cancelled = 0;
+    for (auto& m : events_of(all))
+        if (m.event.kind == EventKind::Cancelled) ++cancelled;
+    REQUIRE(cancelled == 1); // only the owner's cancel did anything
+}

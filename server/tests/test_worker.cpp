@@ -135,7 +135,8 @@ TEST_CASE("each command kind reaches the right Book call", "[worker]") {
         w.submit(NewOrder{1, 1, limit(1, 1, engine::Side::Sell, 100, 10)});
         w.submit(NewOrder{2, 1, limit(2, 2, engine::Side::Buy, 100, 4)});
         // 3: modify the resting sell to total 8 (4 filled, so 4 left).
-        w.submit(ModifyOrder{3, 1, 1, 100, 8});
+        w.submit(ModifyOrder{.request_id = 3, .symbol = 1, .requester = 1, .order_id = 1,
+                             .new_price = 100, .new_quantity = 8});
         // 4: sell stop at 90 (last trade 100, so it stays dormant).
         engine::StopOrder s{};
         s.id = 5;
@@ -145,12 +146,13 @@ TEST_CASE("each command kind reaches the right Book call", "[worker]") {
         s.quantity = 1;
         w.submit(PlaceStop{4, 1, s});
         // 5: move the stop to 80. 6: cancel it. 7: cancel it again (too late).
-        w.submit(ModifyStop{5, 1, 5, 80, std::nullopt, 1});
-        w.submit(CancelStop{6, 1, 5});
-        w.submit(CancelStop{7, 1, 5});
+        w.submit(ModifyStop{.request_id = 5, .symbol = 1, .requester = 3, .order_id = 5,
+                            .new_stop_price = 80, .new_limit_price = std::nullopt, .new_quantity = 1});
+        w.submit(CancelStop{.request_id = 6, .symbol = 1, .requester = 3, .order_id = 5});
+        w.submit(CancelStop{.request_id = 7, .symbol = 1, .requester = 3, .order_id = 5});
         // 8: cancel the resting sell. 9: cancel an id that never existed.
-        w.submit(CancelOrder{8, 1, 1});
-        w.submit(CancelOrder{9, 1, 999});
+        w.submit(CancelOrder{.request_id = 8, .symbol = 1, .requester = 1, .order_id = 1});
+        w.submit(CancelOrder{.request_id = 9, .symbol = 1, .requester = 1, .order_id = 999});
     }
     auto all = drain(out);
     auto replies = replies_of(all);
