@@ -53,8 +53,8 @@ TEST_CASE("Triggered stops can cascade and are removed before firing") {
     CHECK(trigger.trades[0].price == 100);
     CHECK_FALSE(book.best_bid().has_value());
     // Both already fired: too late, not unknown.
-    CHECK(book.cancel_stop_order(3, 0) == RejectReason::TooLate);
-    CHECK(book.cancel_stop_order(4, 0) == RejectReason::TooLate);
+    CHECK(book.cancel_stop_order(3, 13, 0) == RejectReason::TooLate);
+    CHECK(book.cancel_stop_order(4, 14, 0) == RejectReason::TooLate);
 }
 
 TEST_CASE("Cancelling a dormant stop prevents it from firing") {
@@ -62,7 +62,7 @@ TEST_CASE("Cancelling a dormant stop prevents it from firing") {
     book.add_order({1, 11, Side::Buy, OrderType::Limit, 100, 1}, 1);
     book.add_order({2, 12, Side::Buy, OrderType::Limit, 100, 3}, 2);
     book.place_stop_order({3, 13, Side::Sell, 100, 2}, 0);
-    CHECK(book.cancel_stop_order(3, 0) == RejectReason::None);
+    CHECK(book.cancel_stop_order(3, 13, 0) == RejectReason::None);
 
     book.add_order({4, 14, Side::Sell, OrderType::Limit, 100, 1}, 3);
     const auto remainder = book.add_order({5, 15, Side::Sell, OrderType::Market, std::nullopt, 3}, 4);
@@ -76,8 +76,8 @@ TEST_CASE("Stop cancellation does not consume resting-order pool capacity") {
     book.add_order({1, 11, Side::Buy, OrderType::Limit, 90, 1}, 1);
     book.place_stop_order({2, 12, Side::Sell, 80, 1}, 0);
 
-    CHECK(book.cancel_stop_order(2, 0) == RejectReason::None);
-    CHECK(book.cancel_order(1, 0) == RejectReason::None);
+    CHECK(book.cancel_stop_order(2, 12, 0) == RejectReason::None);
+    CHECK(book.cancel_order(1, 11, 0) == RejectReason::None);
     const auto replacement = book.add_order({3, 13, Side::Buy, OrderType::Limit, 90, 1}, 2);
     CHECK(replacement.reject_reason == RejectReason::None);
     CHECK(book.best_bid() == 90);

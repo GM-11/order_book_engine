@@ -54,7 +54,7 @@ TEST_CASE("Order lifecycle events are timestamped and sequenced") {
     CHECK(accepted_and_rested[1].price == 100);
     CHECK(accepted_and_rested[1].quantity == 5);
 
-    book.modify_order(1, 100, 3, 11);
+    book.modify_order(1, 11, 100, 3, 11);
     const auto modified = book.drain_events();
     REQUIRE(modified.size() == 1);
     CHECK(modified[0].sequence_number == 3);
@@ -62,7 +62,7 @@ TEST_CASE("Order lifecycle events are timestamped and sequenced") {
     CHECK(modified[0].ts == 11);
     CHECK(modified[0].quantity == 3);
 
-    REQUIRE(book.cancel_order(1, 12) == RejectReason::None);
+    REQUIRE(book.cancel_order(1, 11, 12) == RejectReason::None);
     const auto cancelled = book.drain_events();
     REQUIRE(cancelled.size() == 1);
     CHECK(cancelled[0].sequence_number == 4);
@@ -113,7 +113,7 @@ TEST_CASE("Stop cancellation emits its lifecycle event") {
             RejectReason::None);
     book.drain_events();
 
-    REQUIRE(book.cancel_stop_order(1, 6) == RejectReason::None);
+    REQUIRE(book.cancel_stop_order(1, 11, 6) == RejectReason::None);
     const auto events = book.drain_events();
     REQUIRE(events.size() == 1);
     CHECK(events[0].kind == EventKind::StopCancelled);
@@ -153,8 +153,8 @@ void run_replay_scenario(Book &book) {
     book.add_order({1, 10, Side::Sell, OrderType::Limit, 100, 2}, 1);
     book.add_order({2, 20, Side::Buy, OrderType::Limit, 100, 1}, 2);
     book.add_order({3, 30, Side::Buy, OrderType::Limit, 95, 2}, 3);
-    book.modify_order(3, 95, 1, 4);
-    book.cancel_order(3, 5);
+    book.modify_order(3, 30, 95, 1, 4);
+    book.cancel_order(3, 30, 5);
 }
 } // namespace
 
@@ -164,8 +164,8 @@ TEST_CASE("Mixed event streams use contiguous sequence numbers") {
     book.add_order({1, 10, Side::Sell, OrderType::Limit, 100, 2}, 0);
     book.add_order({2, 20, Side::Buy, OrderType::Limit, 100, 1}, 0);
     book.add_order({3, 30, Side::Buy, OrderType::Limit, 95, 2}, 1);
-    book.modify_order(3, 95, 1, 2);
-    book.cancel_order(3, 3);
+    book.modify_order(3, 30, 95, 1, 2);
+    book.cancel_order(3, 30, 3);
 
     book.add_order({4, 40, Side::Sell, OrderType::Limit, 120, 1}, 4);
     book.add_order({5, 50, Side::Buy, OrderType::Market, std::nullopt, 1}, 4);
@@ -220,7 +220,7 @@ TEST_CASE("A reprice modify emits Replaced, never a terminal Cancelled") {
     book.add_order({1, 11, Side::Buy, OrderType::Limit, 100, 5}, 1);
     book.drain_events();
 
-    REQUIRE(book.modify_order(1, 101, 7, 2).reject_reason ==
+    REQUIRE(book.modify_order(1, 11, 101, 7, 2).reject_reason ==
             RejectReason::None);
     const auto events = book.drain_events();
     REQUIRE(events.size() == 3);
@@ -238,7 +238,7 @@ TEST_CASE("A reprice modify emits Replaced, never a terminal Cancelled") {
     expect_every_order_terminates(events);
 
     // A user cancel is still a Cancelled.
-    REQUIRE(book.cancel_order(1, 3) == RejectReason::None);
+    REQUIRE(book.cancel_order(1, 11, 3) == RejectReason::None);
     const auto cancelled = book.drain_events();
     REQUIRE(cancelled.size() == 1);
     CHECK(cancelled[0].kind == EventKind::Cancelled);

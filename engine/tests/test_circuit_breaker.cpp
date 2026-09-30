@@ -212,8 +212,8 @@ TEST_CASE("Cancellation is never blocked by an active halt") {
     REQUIRE(halted.reject_reason == RejectReason::SymbolHalted);
 
     // Still well within the halt window (halt_until_ = 70).
-    CHECK(book.cancel_order(100, 0) == RejectReason::None);
-    CHECK(book.cancel_stop_order(200, 0) == RejectReason::None);
+    CHECK(book.cancel_order(100, 100, 0) == RejectReason::None);
+    CHECK(book.cancel_stop_order(200, 200, 0) == RejectReason::None);
     expect_not_crossed(book);
 }
 
@@ -247,7 +247,7 @@ TEST_CASE("A stop that can't fire because the symbol is halted stays dormant, "
 
     // The stop must still be cancellable -- proof it was never erased, unlike
     // the old (buggy) behavior where it vanished the instant the halt engaged.
-    CHECK(book.cancel_stop_order(20, 0) == RejectReason::None);
+    CHECK(book.cancel_stop_order(20, 200, 0) == RejectReason::None);
     expect_not_crossed(book);
 }
 
@@ -284,7 +284,7 @@ TEST_CASE("A dormant stop that survived a halt fires normally on the first "
     // If the stop survived the halt and fired here, its market buy takes the
     // 160 ask. If it was lost during the halt, 160 is still resting.
     CHECK_FALSE(book.best_ask().has_value());
-    CHECK(book.cancel_stop_order(20, 60) == RejectReason::TooLate);
+    CHECK(book.cancel_stop_order(20, 200, 60) == RejectReason::TooLate);
     expect_not_crossed(book);
 }
 

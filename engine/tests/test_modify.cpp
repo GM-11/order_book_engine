@@ -13,7 +13,7 @@ TEST_CASE("Reducing remaining quantity keeps FIFO priority") {
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 100}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 500, 50}, 1);
 
-    const auto reduced = book.modify_order(1, 500, 60, 2);
+    const auto reduced = book.modify_order(1, 1, 500, 60, 2);
     CHECK(reduced.reject_reason == RejectReason::None);
     CHECK(reduced.unaccepted_quantity == 0);
     CHECK(reduced.trades.empty());
@@ -35,7 +35,7 @@ TEST_CASE("An unchanged modify retains FIFO position") {
     Book book;
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 2}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 500, 1}, 1);
-    const auto unchanged = book.modify_order(1, 500, 2, 2);
+    const auto unchanged = book.modify_order(1, 1, 500, 2, 2);
     CHECK(unchanged.reject_reason == RejectReason::None);
     CHECK(unchanged.trades.empty());
 
@@ -51,7 +51,7 @@ TEST_CASE("Increasing remaining quantity loses FIFO position") {
     Book book;
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 100}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 500, 50}, 1);
-    CHECK(book.modify_order(1, 500, 150, 2).reject_reason ==
+    CHECK(book.modify_order(1, 1, 500, 150, 2).reject_reason ==
           RejectReason::None);
 
     const auto sell =
@@ -70,7 +70,7 @@ TEST_CASE("A reprice joins the tail of its new price level") {
     Book book;
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 502, 1}, 1);
-    CHECK(book.modify_order(1, 502, 1, 2).reject_reason == RejectReason::None);
+    CHECK(book.modify_order(1, 1, 502, 1, 2).reject_reason == RejectReason::None);
 
     const auto first =
         book.add_order({3, 3, Side::Sell, OrderType::Limit, 502, 1}, 3);
@@ -88,12 +88,12 @@ TEST_CASE(
     Book book;
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 1}, 0);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 510, 1}, 1);
-    CHECK(book.modify_order(1, 490, 1, 2).reject_reason == RejectReason::None);
+    CHECK(book.modify_order(1, 1, 490, 1, 2).reject_reason == RejectReason::None);
     CHECK(book.best_bid() == 490);
-    CHECK(book.modify_order(2, 520, 1, 3).reject_reason == RejectReason::None);
+    CHECK(book.modify_order(2, 2, 520, 1, 3).reject_reason == RejectReason::None);
     CHECK(book.best_ask() == 520);
-    CHECK(book.cancel_order(1, 0) == RejectReason::None);
-    CHECK(book.cancel_order(2, 0) == RejectReason::None);
+    CHECK(book.cancel_order(1, 1, 0) == RejectReason::None);
+    CHECK(book.cancel_order(2, 2, 0) == RejectReason::None);
     CHECK_FALSE(book.best_bid().has_value());
     CHECK_FALSE(book.best_ask().has_value());
     expect_not_crossed(book);
@@ -105,7 +105,7 @@ TEST_CASE("A crossing reprice executes at the passive price and rests its "
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 5}, 0);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 505, 2}, 1);
 
-    const auto modified = book.modify_order(1, 505, 5, 2);
+    const auto modified = book.modify_order(1, 1, 505, 5, 2);
     REQUIRE(modified.trades.size() == 1);
     CHECK(modified.trades[0].aggressor_id == 1);
     CHECK(modified.trades[0].passive_id == 2);
@@ -126,16 +126,16 @@ TEST_CASE("A crossing reprice executes at the passive price and rests its "
 TEST_CASE("Unknown ids are UnknownOrder; filled and cancelled ids are TooLate") {
     Book book;
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 1}, 0);
-    CHECK(book.modify_order(99, 501, 1, 1).reject_reason ==
+    CHECK(book.modify_order(99, 1, 501, 1, 1).reject_reason ==
           RejectReason::UnknownOrder);
     CHECK(book.best_bid() == 500);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 500, 1}, 2);
-    CHECK(book.modify_order(1, 501, 1, 3).reject_reason ==
+    CHECK(book.modify_order(1, 1, 501, 1, 3).reject_reason ==
           RejectReason::TooLate); // #1 was filled
     CHECK(book.final_state(1) == FinalState::Filled);
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 490, 1}, 4);
-    CHECK(book.cancel_order(3, 0) == RejectReason::None);
-    CHECK(book.modify_order(3, 501, 1, 5).reject_reason ==
+    CHECK(book.cancel_order(3, 3, 0) == RejectReason::None);
+    CHECK(book.modify_order(3, 3, 501, 1, 5).reject_reason ==
           RejectReason::TooLate); // #3 was cancelled
     CHECK(book.final_state(3) == FinalState::Cancelled);
     CHECK_FALSE(book.best_bid().has_value());
@@ -147,11 +147,11 @@ TEST_CASE("Invalid quantity and prices preserve the original FIFO order") {
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 2}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 500, 1}, 1);
 
-    CHECK(book.modify_order(1, 500, 0, 2).reject_reason ==
+    CHECK(book.modify_order(1, 1, 500, 0, 2).reject_reason ==
           RejectReason::InvalidQuantity);
-    CHECK(book.modify_order(1, 0, 2, 3).reject_reason ==
+    CHECK(book.modify_order(1, 1, 0, 2, 3).reject_reason ==
           RejectReason::InvalidPrice);
-    CHECK(book.modify_order(1, -1, 2, 4).reject_reason ==
+    CHECK(book.modify_order(1, 1, -1, 2, 4).reject_reason ==
           RejectReason::InvalidPrice);
     CHECK(book.best_bid() == 500);
     const auto sell =
@@ -177,7 +177,7 @@ TEST_CASE(
     REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, std::nullopt, 1}, 20)
                 .reject_reason == RejectReason::SymbolHalted);
 
-    const auto rejected = book.modify_order(3, 96, 2, 30);
+    const auto rejected = book.modify_order(3, 3, 96, 2, 30);
     CHECK(rejected.reject_reason == RejectReason::SymbolHalted);
     CHECK(rejected.unaccepted_quantity == 2);
     CHECK(rejected.trades.empty());
@@ -202,7 +202,7 @@ TEST_CASE("Reducing remaining quantity is permitted during a halt") {
     book.add_order({6, 6, Side::Sell, OrderType::Limit, 150, 1}, 20);
     REQUIRE(book.add_order({7, 7, Side::Buy, OrderType::Market, std::nullopt, 1}, 20)
                 .reject_reason == RejectReason::SymbolHalted);
-    const auto reduced = book.modify_order(3, 95, 1, 30);
+    const auto reduced = book.modify_order(3, 3, 95, 1, 30);
     CHECK(reduced.reject_reason == RejectReason::None);
     CHECK(reduced.trades.empty());
     const auto after =
@@ -220,7 +220,7 @@ TEST_CASE(
     book.add_order({2, 8, Side::Sell, OrderType::Limit, 503, 1}, 1);
     book.add_order({3, 7, Side::Sell, OrderType::Limit, 505, 2}, 2);
 
-    const auto modified = book.modify_order(1, 505, 3, 3);
+    const auto modified = book.modify_order(1, 7, 505, 3, 3);
     REQUIRE(modified.trades.size() == 1);
     CHECK(modified.trades[0].aggressor_id == 1);
     CHECK(modified.trades[0].passive_id == 2);
@@ -248,7 +248,7 @@ TEST_CASE("A partially filled order can reduce its remaining size without "
     CHECK(partial.trades[0].passive_id == 1);
     // Modify qty is the TOTAL: 30 already filled + 50 left = 80. 50 left is
     // less than the 70 resting, so it is edited in place and stays ahead of #2.
-    CHECK(book.modify_order(1, 500, 80, 3).reject_reason == RejectReason::None);
+    CHECK(book.modify_order(1, 1, 500, 80, 3).reject_reason == RejectReason::None);
     const auto next =
         book.add_order({4, 4, Side::Sell, OrderType::Limit, 500, 50}, 4);
     REQUIRE(next.trades.size() == 1);
@@ -264,9 +264,9 @@ TEST_CASE("A partially filled order can reduce its remaining size without "
 TEST_CASE("Dormant stop ids are not eligible for limit-order modification") {
     Book book;
     book.place_stop_order({1, 1, Side::Sell, 500, 1}, 0);
-    CHECK(book.modify_order(1, 501, 2, 0).reject_reason ==
+    CHECK(book.modify_order(1, 1, 501, 2, 0).reject_reason ==
           RejectReason::UnknownOrder);
-    CHECK(book.cancel_stop_order(1, 0) == RejectReason::None);
+    CHECK(book.cancel_stop_order(1, 1, 0) == RejectReason::None);
     expect_not_crossed(book);
 }
 
@@ -275,7 +275,7 @@ TEST_CASE("A full pool still allows replacement because the old node is freed "
     Book book(2);
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 500, 1}, 0);
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 490, 1}, 1);
-    const auto modified = book.modify_order(1, 501, 1, 2);
+    const auto modified = book.modify_order(1, 1, 501, 1, 2);
     CHECK(modified.reject_reason == RejectReason::None);
     CHECK(modified.unaccepted_quantity == 0);
     CHECK(book.best_bid() == 501);
@@ -293,7 +293,7 @@ TEST_CASE("A crossing reprice triggers and executes an eligible dormant stop") {
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 505, 2}, 1);
     book.place_stop_order({3, 3, Side::Buy, 505, 1}, 0);
 
-    const auto modified = book.modify_order(1, 505, 1, 2);
+    const auto modified = book.modify_order(1, 1, 505, 1, 2);
     REQUIRE(modified.trades.size() == 1);
     CHECK(modified.trades[0].passive_id == 2);
     CHECK(modified.trades[0].price == 505);
@@ -301,7 +301,7 @@ TEST_CASE("A crossing reprice triggers and executes an eligible dormant stop") {
     CHECK_FALSE(
         book.best_ask()
             .has_value()); // the stop's market buy consumed the other unit
-    CHECK(book.cancel_stop_order(3, 0) == RejectReason::TooLate); // fired
+    CHECK(book.cancel_stop_order(3, 3, 0) == RejectReason::TooLate); // fired
     expect_not_crossed(book);
 }
 
@@ -318,7 +318,7 @@ TEST_CASE("A reprice at halt expiry clears the stale halt state") {
                 .reject_reason ==
             RejectReason::SymbolHalted); // halt_until = 70
 
-    const auto resumed = book.modify_order(3, 96, 2, 70);
+    const auto resumed = book.modify_order(3, 3, 96, 2, 70);
     CHECK(resumed.reject_reason == RejectReason::None);
     CHECK(resumed.trades.empty());
     CHECK(book.best_bid() == 96);
@@ -373,7 +373,7 @@ TEST_CASE("A repriced bid rests its halt remainder at the upper band edge") {
     seed_band_halt_sweep(book);
     book.add_order({10, 10, Side::Buy, OrderType::Limit, 90, 4}, 0);
 
-    const auto result = book.modify_order(10, 170, 4, 1);
+    const auto result = book.modify_order(10, 10, 170, 4, 1);
     check_band_halt_sweep(book, result);
     const auto after_halt =
         book.add_order({31, 31, Side::Sell, OrderType::Limit, 110, 3}, 51);
@@ -454,7 +454,7 @@ TEST_CASE("A market order does not rest a remainder when a halt trips") {
     CHECK(result.reject_reason == RejectReason::SymbolHalted);
     CHECK_FALSE(result.rested_price.has_value());
     // Remainder cancelled by the halt: the order existed, so TooLate.
-    CHECK(book.cancel_order(10, 0) == RejectReason::TooLate);
+    CHECK(book.cancel_order(10, 10, 0) == RejectReason::TooLate);
     CHECK(book.best_ask() == 160);
     expect_not_crossed(book);
     expect_not_crossed(book);

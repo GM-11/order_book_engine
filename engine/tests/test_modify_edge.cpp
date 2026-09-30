@@ -17,7 +17,7 @@ TEST_CASE("In-flight fill: modify qty is the TOTAL, not the remaining") {
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 100, 2},
                    1); // fills 2 of #1
 
-    REQUIRE(book.modify_order(1, 100, 5, 2).reject_reason ==
+    REQUIRE(book.modify_order(1, 1, 100, 5, 2).reject_reason ==
             RejectReason::None);
 
     // Total 5, filled 2 -> #1 has 3 left and keeps its place (it got smaller).
@@ -40,7 +40,7 @@ TEST_CASE("Modify total below filled cancels the rest") {
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 100, 7}, 1); // 7 filled
     book.drain_events();
 
-    const auto r = book.modify_order(1, 100, 5, 2); // wants 5 total, has 7
+    const auto r = book.modify_order(1, 1, 100, 5, 2); // wants 5 total, has 7
     CHECK(r.reject_reason == RejectReason::None);
     CHECK(r.trades.empty());
     CHECK_FALSE(book.best_bid().has_value()); // no more buying at all
@@ -60,7 +60,7 @@ TEST_CASE("Modify total equal to filled also cancels the rest") {
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 100, 10}, 0);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 100, 5}, 1); // 5 filled
 
-    CHECK(book.modify_order(1, 100, 5, 2).reject_reason == RejectReason::None);
+    CHECK(book.modify_order(1, 1, 100, 5, 2).reject_reason == RejectReason::None);
     CHECK_FALSE(book.best_bid().has_value());
     CHECK(book.final_state(1) == FinalState::Cancelled);
     CHECK(book.check_invariants());
@@ -73,7 +73,7 @@ TEST_CASE("Increasing total after a partial fill rests total minus filled "
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 100, 4}, 0);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 100, 2}, 1); // #1: 2 filled
 
-    REQUIRE(book.modify_order(1, 100, 15, 2).reject_reason ==
+    REQUIRE(book.modify_order(1, 1, 100, 15, 2).reject_reason ==
             RejectReason::None);
 
     // #1 now has 15 - 2 = 13 resting; #3 still 4.
@@ -99,7 +99,7 @@ TEST_CASE("An aggressor that partly fills and then rests remembers its fills") {
     // Buys 10: 3 fill on arrival, 7 rest. Its filled count must be 3.
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 100, 10}, 1);
 
-    REQUIRE(book.modify_order(2, 100, 5, 2).reject_reason ==
+    REQUIRE(book.modify_order(2, 2, 100, 5, 2).reject_reason ==
             RejectReason::None);
 
     // Total 5, filled 3 -> 2 resting (not 5).
@@ -115,16 +115,16 @@ TEST_CASE("Modify and cancel after a full fill are TooLate, not UnknownOrder") {
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 100, 5}, 1);
     book.drain_events();
 
-    CHECK(book.modify_order(1, 100, 3, 2).reject_reason ==
+    CHECK(book.modify_order(1, 1, 100, 3, 2).reject_reason ==
           RejectReason::TooLate);
-    CHECK(book.cancel_order(1, 2) == RejectReason::TooLate);
+    CHECK(book.cancel_order(1, 1, 2) == RejectReason::TooLate);
     CHECK(book.final_state(1) == FinalState::Filled);
     CHECK(book.final_state(2) == FinalState::Filled); // the aggressor too
     CHECK(book.drain_events().empty()); // rejections emit nothing
 
-    CHECK(book.modify_order(99, 100, 3, 2).reject_reason ==
+    CHECK(book.modify_order(99, 1, 100, 3, 2).reject_reason ==
           RejectReason::UnknownOrder);
-    CHECK(book.cancel_order(99, 2) == RejectReason::UnknownOrder);
+    CHECK(book.cancel_order(99, 1, 2) == RejectReason::UnknownOrder);
     CHECK_FALSE(book.final_state(99).has_value());
 }
 
@@ -140,7 +140,7 @@ TEST_CASE("Finished order ids cannot be reused") {
     book.add_order({1, 1, Side::Buy, OrderType::Limit, 100, 5}, 0);
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 100, 5}, 1); // #1 filled
     book.add_order({3, 3, Side::Buy, OrderType::Limit, 90, 5}, 2);
-    REQUIRE(book.cancel_order(3, 3) == RejectReason::None); // #3 cancelled
+    REQUIRE(book.cancel_order(3, 3, 3) == RejectReason::None); // #3 cancelled
     book.drain_events();
 
     SECTION("filled id") {
@@ -175,7 +175,7 @@ TEST_CASE("Modify below filled cancels the rest even during a halt") {
 
     // Total 1, already filled 1 -> cancel the rest. A cancel only reduces
     // risk, so the halt does not block it.
-    const auto r = book.modify_order(3, 95, 1, 30);
+    const auto r = book.modify_order(3, 3, 95, 1, 30);
     CHECK(r.reject_reason == RejectReason::None);
     CHECK_FALSE(book.best_bid().has_value());
     CHECK(book.final_state(3) == FinalState::Cancelled);

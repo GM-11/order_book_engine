@@ -72,20 +72,20 @@ TEST_CASE("cancel_stop_order says why it could not cancel") {
             RejectReason::None);
 
     SECTION("dormant: cancelled; a second cancel is too late") {
-        CHECK(book.cancel_stop_order(11, 1) == RejectReason::None);
-        CHECK(book.cancel_stop_order(11, 2) == RejectReason::TooLate);
+        CHECK(book.cancel_stop_order(11, 11, 1) == RejectReason::None);
+        CHECK(book.cancel_stop_order(11, 11, 2) == RejectReason::TooLate);
         CHECK(book.final_state(11) == FinalState::Cancelled);
     }
 
     SECTION("already triggered: too late") {
         print_trade(book, 100, next, 1); // wakes stop 10 (sell at 100)
-        CHECK(book.cancel_stop_order(10, 2) == RejectReason::TooLate);
-        CHECK(book.cancel_stop_order(11, 2) == RejectReason::None);
+        CHECK(book.cancel_stop_order(10, 10, 2) == RejectReason::TooLate);
+        CHECK(book.cancel_stop_order(11, 11, 2) == RejectReason::None);
     }
 
     SECTION("never a stop: unknown, even if the id is a live limit order") {
-        CHECK(book.cancel_stop_order(1, 1) == RejectReason::UnknownOrder);
-        CHECK(book.cancel_stop_order(999, 1) == RejectReason::UnknownOrder);
+        CHECK(book.cancel_stop_order(1, 1, 1) == RejectReason::UnknownOrder);
+        CHECK(book.cancel_stop_order(999, 1, 1) == RejectReason::UnknownOrder);
     }
 }
 
@@ -120,8 +120,8 @@ TEST_CASE("A stop-limit fires as a limit order and can rest") {
 
     // It is now a live limit order: cancel_stop_order is too late,
     // cancel_order works.
-    CHECK(book.cancel_stop_order(10, 3) == RejectReason::TooLate);
-    CHECK(book.cancel_order(10, 3) == RejectReason::None);
+    CHECK(book.cancel_stop_order(10, 10, 3) == RejectReason::TooLate);
+    CHECK(book.cancel_order(10, 10, 3) == RejectReason::None);
     CHECK_FALSE(book.best_ask().has_value());
     CHECK(book.check_invariants());
 }
@@ -156,7 +156,7 @@ TEST_CASE("Stop-limit rejects a non-positive limit price") {
           RejectReason::InvalidPrice);
     CHECK(book.place_stop_order({1, 1, Side::Sell, 90, 1, -5}, 0) ==
           RejectReason::InvalidPrice);
-    CHECK(book.cancel_stop_order(1, 0) == RejectReason::UnknownOrder);
+    CHECK(book.cancel_stop_order(1, 1, 0) == RejectReason::UnknownOrder);
 }
 
 TEST_CASE("A stop the last trade has already reached is rejected on entry") {
@@ -179,7 +179,7 @@ TEST_CASE("A stop the last trade has already reached is rejected on entry") {
         CHECK(book.place_stop_order({3, 3, Side::Sell, 99, 1}, 1) ==
               RejectReason::None);
         // A rejected stop leaves no trace: its id is free.
-        CHECK(book.cancel_stop_order(1, 1) == RejectReason::UnknownOrder);
+        CHECK(book.cancel_stop_order(1, 1, 1) == RejectReason::UnknownOrder);
         CHECK(book.place_stop_order({1, 1, Side::Sell, 98, 1}, 1) ==
               RejectReason::None);
     }
@@ -211,7 +211,7 @@ TEST_CASE("Modifying a stop moves its trigger") {
             RejectReason::None);
     book.drain_events();
 
-    REQUIRE(book.modify_stop_order(10, 90, std::nullopt, 2, 2) ==
+    REQUIRE(book.modify_stop_order(10, 10, 90, std::nullopt, 2, 2) ==
             RejectReason::None);
     const auto modified = book.drain_events();
     REQUIRE(modified.size() == 1);
@@ -235,7 +235,7 @@ TEST_CASE("Modifying a stop moves its trigger") {
         if (e.kind == EventKind::Trade && e.order_id == 10)
             fired += e.quantity;
     CHECK(fired == 2);
-    CHECK(book.modify_stop_order(10, 80, std::nullopt, 1, 6) ==
+    CHECK(book.modify_stop_order(10, 10, 80, std::nullopt, 1, 6) ==
           RejectReason::TooLate);
     CHECK(book.check_invariants());
 }
@@ -246,7 +246,7 @@ TEST_CASE("Modifying a stop can turn it into a stop-limit") {
     book.add_order({2, 2, Side::Sell, OrderType::Limit, 110, 1}, 0);
     REQUIRE(book.place_stop_order({10, 10, Side::Buy, 100, 1}, 0) ==
             RejectReason::None);
-    REQUIRE(book.modify_stop_order(10, 100, 105, 1, 1) == RejectReason::None);
+    REQUIRE(book.modify_stop_order(10, 10, 100, 105, 1, 1) == RejectReason::None);
 
     // As a stop-market it would have bought the 110 ask. As a stop-limit
     // capped at 105 it rests a bid at 105 instead.
@@ -265,15 +265,15 @@ TEST_CASE("Rejected stop modifies leave the stop unchanged") {
             RejectReason::None);
     book.drain_events();
 
-    CHECK(book.modify_stop_order(10, 100, std::nullopt, 2, 2) ==
+    CHECK(book.modify_stop_order(10, 10, 100, std::nullopt, 2, 2) ==
           RejectReason::StopWouldTrigger);
-    CHECK(book.modify_stop_order(10, 95, std::nullopt, 0, 2) ==
+    CHECK(book.modify_stop_order(10, 10, 95, std::nullopt, 0, 2) ==
           RejectReason::InvalidQuantity);
-    CHECK(book.modify_stop_order(10, 0, std::nullopt, 2, 2) ==
+    CHECK(book.modify_stop_order(10, 10, 0, std::nullopt, 2, 2) ==
           RejectReason::InvalidPrice);
-    CHECK(book.modify_stop_order(10, 95, 0, 2, 2) ==
+    CHECK(book.modify_stop_order(10, 10, 95, 0, 2, 2) ==
           RejectReason::InvalidPrice);
-    CHECK(book.modify_stop_order(77, 95, std::nullopt, 2, 2) ==
+    CHECK(book.modify_stop_order(77, 1, 95, std::nullopt, 2, 2) ==
           RejectReason::UnknownOrder);
     CHECK(book.drain_events().empty());
 
@@ -304,15 +304,15 @@ TEST_CASE("Stop modify: only a size reduction keeps its firing place") {
 
     CHECK(run([](Book &) {}) == std::vector<OrderId>{10, 11, 12});
     CHECK(run([](Book &b) {
-              REQUIRE(b.modify_stop_order(10, 99, std::nullopt, 1, 0) ==
+              REQUIRE(b.modify_stop_order(10, 10, 99, std::nullopt, 1, 0) ==
                       RejectReason::None);
           }) == std::vector<OrderId>{10, 11, 12}); // smaller: keeps place
     CHECK(run([](Book &b) {
-              REQUIRE(b.modify_stop_order(10, 99, std::nullopt, 5, 0) ==
+              REQUIRE(b.modify_stop_order(10, 10, 99, std::nullopt, 5, 0) ==
                       RejectReason::None);
           }) == std::vector<OrderId>{11, 12, 10}); // bigger: to the back
     CHECK(run([](Book &b) {
-              REQUIRE(b.modify_stop_order(10, 99, 60, 3, 0) ==
+              REQUIRE(b.modify_stop_order(10, 10, 99, 60, 3, 0) ==
                       RejectReason::None);
           }) == std::vector<OrderId>{11, 12, 10}); // new limit: to the back
 }

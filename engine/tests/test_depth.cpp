@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include <catch2/catch_test_macros.hpp>
 
 #include "engine/book.hpp"
@@ -69,20 +70,20 @@ TEST_CASE("Cancel, in-place modify and replace keep totals correct") {
     book.add_order({2, 2, Side::Buy, OrderType::Limit, 100, 3}, 1);
 
     SECTION("cancel") {
-        REQUIRE(book.cancel_order(1, 2) == RejectReason::None);
+        REQUIRE(book.cancel_order(1, 1, 2) == RejectReason::None);
         check_level(book.depth(10).bids.at(0), 100, 3, 1);
         CHECK(book.check_invariants());
     }
 
     SECTION("in-place reduce lowers the total by exactly the difference") {
-        REQUIRE(book.modify_order(1, 100, 2, 2).reject_reason ==
+        REQUIRE(book.modify_order(1, 1, 100, 2, 2).reject_reason ==
                 RejectReason::None);
         check_level(book.depth(10).bids.at(0), 100, 5, 2);
         CHECK(book.check_invariants());
     }
 
     SECTION("replace to a new price moves quantity between levels") {
-        REQUIRE(book.modify_order(1, 101, 9, 2).reject_reason ==
+        REQUIRE(book.modify_order(1, 1, 101, 9, 2).reject_reason ==
                 RejectReason::None);
         const auto d = book.depth(10);
         REQUIRE(d.bids.size() == 2);
@@ -92,7 +93,7 @@ TEST_CASE("Cancel, in-place modify and replace keep totals correct") {
     }
 
     SECTION("size increase at the same price goes to the back, total grows") {
-        REQUIRE(book.modify_order(1, 100, 8, 2).reject_reason ==
+        REQUIRE(book.modify_order(1, 1, 100, 8, 2).reject_reason ==
                 RejectReason::None);
         check_level(book.depth(10).bids.at(0), 100, 11, 2);
         CHECK(book.check_invariants());
@@ -127,7 +128,7 @@ TEST_CASE("Snapshot as_of_sequence matches the last emitted event") {
     CHECK(snap.as_of_sequence == events.back().sequence_number);
 
     // A later event must have a higher number than the snapshot.
-    book.cancel_order(1, 3);
+    book.cancel_order(1, 1, 3);
     const auto later = book.drain_events();
     REQUIRE(later.size() == 1);
     CHECK(later[0].sequence_number == snap.as_of_sequence + 1);
@@ -145,6 +146,9 @@ TEST_CASE("Random operation stream never breaks book invariants") {
     OrderId next_id = 1;
     std::vector<OrderId> ids;
     std::vector<OrderId> stop_ids;
+    // Who placed each id, so cancels/modifies come from the real owner.
+    // (Kept outside the rng so the op sequence is unchanged.)
+    std::unordered_map<OrderId, OwnerId> owner_of;
     Timestamp now = 0;
 
     for (int step = 0; step < 5000; ++step) {
@@ -160,15 +164,17 @@ TEST_CASE("Random operation stream never breaks book invariants") {
                             static_cast<Quantity>(pick(1, 10))},
                            now);
             ids.push_back(id);
+            owner_of[id] = owner;
         } else if (op == 5) {
             book.add_order({next_id++, owner, side, OrderType::Market, std::nullopt,
                             static_cast<Quantity>(pick(1, 15))},
                            now);
         } else if (op == 6 && !ids.empty()) {
-            book.cancel_order(ids[pick(0, static_cast<int>(ids.size()) - 1)],
-                              now);
+            const OrderId id = ids[pick(0, static_cast<int>(ids.size()) - 1)];
+            book.cancel_order(id, owner_of.at(id), now);
         } else if (op == 7 && !ids.empty()) {
-            book.modify_order(ids[pick(0, static_cast<int>(ids.size()) - 1)],
+            const OrderId id = ids[pick(0, static_cast<int>(ids.size()) - 1)];
+            book.modify_order(id, owner_of.at(id),
                               static_cast<Price>(pick(95, 105)),
                               static_cast<Quantity>(pick(1, 10)), now);
         } else if (op == 8) {
@@ -182,16 +188,17 @@ TEST_CASE("Random operation stream never breaks book invariants") {
                                    static_cast<Quantity>(pick(1, 5)), limit},
                                   now);
             stop_ids.push_back(id);
+            owner_of[id] = owner;
         } else if (op == 9 && !stop_ids.empty()) {
             // Modify or cancel a stop: dormant, fired, cancelled or rejected
             // at entry. Every outcome must leave the book consistent.
             const OrderId id =
                 stop_ids[pick(0, static_cast<int>(stop_ids.size()) - 1)];
             if (pick(0, 1))
-                book.cancel_stop_order(id, now);
+                book.cancel_stop_order(id, owner_of.at(id), now);
             else
                 book.modify_stop_order(
-                    id, static_cast<Price>(pick(88, 112)),
+                    id, owner_of.at(id), static_cast<Price>(pick(88, 112)),
                     pick(0, 1) ? std::optional<Price>(pick(93, 107))
                                : std::nullopt,
                     static_cast<Quantity>(pick(1, 5)), now);

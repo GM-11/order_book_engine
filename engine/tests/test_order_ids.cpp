@@ -18,7 +18,7 @@ TEST_CASE("A resting order id cannot be reused while the order is live") {
     CHECK(book.best_bid() == 100);      // the original is untouched
 
     // The original stays reachable: one cancel empties the book.
-    CHECK(book.cancel_order(1, 3) == RejectReason::None);
+    CHECK(book.cancel_order(1, 11, 3) == RejectReason::None);
     CHECK_FALSE(book.best_bid().has_value());
 }
 
@@ -42,7 +42,7 @@ TEST_CASE("Stop ids share the id space with resting orders") {
         CHECK(book.place_stop_order({1, 22, Side::Sell, 90, 1}, 2) ==
               RejectReason::DuplicateOrderId);
         // id 1 is a resting limit, never a stop.
-        CHECK(book.cancel_stop_order(1, 3) == RejectReason::UnknownOrder);
+        CHECK(book.cancel_stop_order(1, 11, 3) == RejectReason::UnknownOrder);
     }
 
     SECTION("order cannot reuse a dormant stop id") {
@@ -67,7 +67,7 @@ TEST_CASE("Ids are live-only: modify and triggered stops keep their own id") {
     SECTION("a repriced order keeps its id") {
         Book book;
         book.add_order({1, 11, Side::Buy, OrderType::Limit, 100, 1}, 1);
-        CHECK(book.modify_order(1, 101, 2, 2).reject_reason ==
+        CHECK(book.modify_order(1, 11, 101, 2, 2).reject_reason ==
               RejectReason::None);
         CHECK(book.best_bid() == 101);
     }
