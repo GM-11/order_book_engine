@@ -19,12 +19,14 @@ struct NewOrder {
 struct CancelOrder {
     RequestId request_id;
     SymbolId symbol;
+    engine::OwnerId requester;
     engine::OrderId order_id;
 };
 
 struct ModifyOrder {
     RequestId request_id;
     SymbolId symbol;
+    engine::OwnerId requester; // see CancelOrder
     engine::OrderId order_id;
     engine::Price new_price;
     engine::Quantity new_quantity;
@@ -39,12 +41,14 @@ struct PlaceStop {
 struct CancelStop {
     RequestId request_id;
     SymbolId symbol;
+    engine::OwnerId requester; // see CancelOrder
     engine::OrderId order_id;
 };
 
 struct ModifyStop {
     RequestId request_id;
     SymbolId symbol;
+    engine::OwnerId requester; // see CancelOrder
     engine::OrderId order_id;
     engine::Price new_stop_price;
     std::optional<engine::Price> new_limit_price;
@@ -68,6 +72,6 @@ struct Reply {
     std::optional<engine::Price> rested_price = std::nullopt;
 };
 
-using Output = std::variant<MarketEvent, Reply>;
-
+struct OutboxClosed {};
+using Output = std::variant<MarketEvent, Reply, OutboxClosed>;
 } // namespace server
