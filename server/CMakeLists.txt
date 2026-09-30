@@ -1,7 +1,6 @@
-# Server layer: routes commands to per-symbol worker threads that own engine Books.
 find_package(Threads REQUIRED)
 
-add_library(server_core STATIC src/worker.cpp)
+add_library(server_core STATIC src/worker.cpp src/router.cpp)
 target_include_directories(server_core PUBLIC include)
 target_link_libraries(server_core PUBLIC engine Threads::Threads)
 target_compile_features(server_core PUBLIC cxx_std_20)
