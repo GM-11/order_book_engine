@@ -63,13 +63,13 @@ void Worker::run() {
 
                 } else if constexpr (std::is_same_v<T, CancelOrder>) {
                     engine::Book &book = book_for(arg.symbol);
-                    engine::RejectReason result = book.cancel_order(arg.order_id, now);
+                    engine::RejectReason result = book.cancel_order(arg.order_id, arg.requester, now);
                     publish(arg.symbol, book);
                     outbox_.push(Reply{arg.request_id, arg.symbol, result});
 
                 } else if constexpr (std::is_same_v<T, ModifyOrder>) {
                     engine::Book &book = book_for(arg.symbol);
-                    engine::OrderResult result = book.modify_order(arg.order_id, arg.new_price, arg.new_quantity, now);
+                    engine::OrderResult result = book.modify_order(arg.order_id, arg.requester, arg.new_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
                     outbox_.push(Reply{arg.request_id, arg.symbol, result.reject_reason, result.unaccepted_quantity,
                                        result.rested_price});
@@ -82,13 +82,13 @@ void Worker::run() {
 
                 } else if constexpr (std::is_same_v<T, CancelStop>) {
                     engine::Book &book = book_for(arg.symbol);
-                    engine::RejectReason result = book.cancel_stop_order(arg.order_id, now);
+                    engine::RejectReason result = book.cancel_stop_order(arg.order_id, arg.requester, now);
                     publish(arg.symbol, book);
                     outbox_.push(Reply{arg.request_id, arg.symbol, result});
 
                 } else if constexpr (std::is_same_v<T, ModifyStop>) {
                     engine::Book &book = book_for(arg.symbol);
-                    engine::RejectReason result = book.modify_stop_order(arg.order_id, arg.new_stop_price,
+                    engine::RejectReason result = book.modify_stop_order(arg.order_id, arg.requester, arg.new_stop_price,
                                                                          arg.new_limit_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
                     outbox_.push(Reply{arg.request_id, arg.symbol, result});
