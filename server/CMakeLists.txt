@@ -11,3 +11,8 @@ if(SERVER_BUILD_TESTS)
   include(CTest)
   add_subdirectory(tests)
 endif()
+
+# The runnable server. For now its "gateway" is the keyboard.
+add_executable(exchange_server src/main.cpp)
+target_link_libraries(exchange_server PRIVATE server_core)
+target_compile_options(exchange_server PRIVATE -Wall -Wextra -Wpedantic)
