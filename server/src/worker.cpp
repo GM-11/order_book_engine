@@ -12,9 +12,14 @@ Worker::Worker(BlockingQueue<Output> &outbox, Clock clock) : outbox_(outbox), cl
         throw std::invalid_argument("Worker needs a clock");
     }
 }
-Worker::~Worker() {
-    if (started_)
-        inbox_.push(Shutdown{});
+Worker::~Worker() { stop(); }
+
+void Worker::stop() {
+    if (!started_ || stopped_)
+        return;
+    stopped_ = true;
+    inbox_.push(Shutdown{});
+    thread_.join();
 }
 
 void Worker::add_book(SymbolId symbol, std::unique_ptr<engine::Book> book) {
