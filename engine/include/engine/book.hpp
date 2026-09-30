@@ -59,10 +59,6 @@ class Book {
     }
 
     OrderResult add_order(Order order, Timestamp now);
-    // cancel/modify (orders and stops) take the id of the account asking.
-    // Only the account that placed an order may touch it. Anyone else gets
-    // UnknownOrder, the same answer as for an id that never existed (never
-    // TooLate), so the reply reveals nothing about other accounts' orders.
     OrderResult modify_order(OrderId order_id, OwnerId requester, Price new_price, Quantity new_qty, Timestamp now);
     RejectReason cancel_order(OrderId order_id, OwnerId requester, Timestamp now);
     std::optional<Price> best_bid() const;
