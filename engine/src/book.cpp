@@ -51,7 +51,10 @@ MatchPlan Book::plan_match(const Order &incoming) const {
     return plan;
 }
 
-OrderResult Book::modify_order(OrderId order_id, Price new_price, Quantity new_total_qty, Timestamp now) {
+OrderResult Book::modify_order(OrderId order_id, OwnerId requester, Price new_price, Quantity new_total_qty,
+                               Timestamp now) {
+    if (!owned_by(order_id, requester)) // someone else's (or no such) order
+        return {{}, new_total_qty, RejectReason::UnknownOrder};
     const auto it = id_index_.find(order_id);
     if (it == id_index_.end()) {
         const RejectReason why =
@@ -268,7 +271,9 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
     return result;
 }
 
-RejectReason Book::cancel_order(OrderId order_id, Timestamp now) {
+RejectReason Book::cancel_order(OrderId order_id, OwnerId requester, Timestamp now) {
+    if (!owned_by(order_id, requester)) // someone else's (or no such) order
+        return RejectReason::UnknownOrder;
     auto it = id_index_.find(order_id);
     if (it == id_index_.end())
         return finished_orders_.contains(order_id) ? RejectReason::TooLate : RejectReason::UnknownOrder;
