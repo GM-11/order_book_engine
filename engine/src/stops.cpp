@@ -53,7 +53,9 @@ RejectReason Book::place_stop_order(StopOrder stop, Timestamp now) {
     return RejectReason::None;
 }
 
-RejectReason Book::cancel_stop_order(OrderId order_id, Timestamp now) {
+RejectReason Book::cancel_stop_order(OrderId order_id, OwnerId requester, Timestamp now) {
+    if (!owned_by(order_id, requester)) // someone else's (or no such) stop
+        return RejectReason::UnknownOrder;
     const auto it = stop_index_.find(order_id);
     if (it == stop_index_.end())
         return stop_gone_reason(order_id);
@@ -68,8 +70,10 @@ RejectReason Book::cancel_stop_order(OrderId order_id, Timestamp now) {
     return RejectReason::None;
 }
 
-RejectReason Book::modify_stop_order(OrderId order_id, Price new_stop_price, std::optional<Price> new_limit_price,
-                                     Quantity new_qty, Timestamp now) {
+RejectReason Book::modify_stop_order(OrderId order_id, OwnerId requester, Price new_stop_price,
+                                     std::optional<Price> new_limit_price, Quantity new_qty, Timestamp now) {
+    if (!owned_by(order_id, requester)) // someone else's (or no such) stop
+        return RejectReason::UnknownOrder;
     const auto it = stop_index_.find(order_id);
     if (it == stop_index_.end())
         return stop_gone_reason(order_id);
