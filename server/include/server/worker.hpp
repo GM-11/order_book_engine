@@ -22,6 +22,7 @@ class Worker {
                   std::unique_ptr<engine::Book> book); // before start() only
     void start();
     void submit(Command command); // callable from any thread
+    void stop();
 
   private:
     void run(); // the thread's loop
@@ -33,6 +34,7 @@ class Worker {
     BlockingQueue<Output> &outbox_;
     Clock clock_;
     bool started_ = false;
+    bool stopped_ = false;
     std::jthread thread_; // MUST be the last member
 };
 } // namespace server
