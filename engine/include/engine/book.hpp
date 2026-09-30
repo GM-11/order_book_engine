@@ -59,8 +59,12 @@ class Book {
     }
 
     OrderResult add_order(Order order, Timestamp now);
-    OrderResult modify_order(OrderId order_id, Price new_price, Quantity new_qty, Timestamp now);
-    RejectReason cancel_order(OrderId order_id, Timestamp now);
+    // cancel/modify (orders and stops) take the id of the account asking.
+    // Only the account that placed an order may touch it. Anyone else gets
+    // UnknownOrder, the same answer as for an id that never existed (never
+    // TooLate), so the reply reveals nothing about other accounts' orders.
+    OrderResult modify_order(OrderId order_id, OwnerId requester, Price new_price, Quantity new_qty, Timestamp now);
+    RejectReason cancel_order(OrderId order_id, OwnerId requester, Timestamp now);
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
     // Top max_levels price levels per side, aggregated. O(max_levels).
@@ -75,14 +79,14 @@ class Book {
     // None: the dormant stop was cancelled. TooLate: that id was a stop but
     // has already triggered (use cancel_order if it now rests as a limit) or
     // was cancelled. UnknownOrder: no stop was ever placed with that id.
-    RejectReason cancel_stop_order(OrderId order_id, Timestamp now);
+    RejectReason cancel_stop_order(OrderId order_id, OwnerId requester, Timestamp now);
     // Replaces a dormant stop's stop price, limit price (empty = stop-market)
     // and quantity. Same prices and a smaller-or-equal quantity keep its place
     // in the firing order; anything else moves it to the back. Same
     // None/TooLate/UnknownOrder rules as cancel_stop_order; on any reject the
     // stop is left unchanged.
-    RejectReason modify_stop_order(OrderId order_id, Price new_stop_price, std::optional<Price> new_limit_price,
-                                   Quantity new_qty, Timestamp now);
+    RejectReason modify_stop_order(OrderId order_id, OwnerId requester, Price new_stop_price,
+                                   std::optional<Price> new_limit_price, Quantity new_qty, Timestamp now);
     std::vector<EngineEvent> drain_events() { return std::exchange(events_, {}); }
 
     bool within_band(Price p) const {
@@ -123,6 +127,15 @@ class Book {
     std::map<Price, Level> asks_;
     std::unordered_map<OrderId, Node *> id_index_;
     std::unordered_map<OrderId, FinalState> finished_orders_;
+    // Owner of every id ever accepted (orders and stops), recorded by emit()
+    // on Accepted/StopAccepted. Kept after the order finishes so a late
+    // cancel from the owner still gets TooLate. Grows like finished_orders_
+    // (session reset).
+    std::unordered_map<OrderId, OwnerId> owner_of_;
+    bool owned_by(OrderId id, OwnerId requester) const {
+        const auto it = owner_of_.find(id);
+        return it != owner_of_.end() && it->second == requester;
+    }
 
     // Dormant stops, sorted by stop price so a trade touches only the stops
     // it wakes: sells wake on a trade <= stop (the highest stops first),
@@ -164,6 +177,8 @@ class Book {
         e.sequence_number = next_seq_++;
         if (e.kind == EventKind::Cancelled || e.kind == EventKind::StopCancelled)
             finished_orders_[e.order_id] = FinalState::Cancelled;
+        if (e.kind == EventKind::Accepted || e.kind == EventKind::StopAccepted)
+            owner_of_.emplace(e.order_id, e.owner_id); // first accept wins
         events_.push_back(e);
     }
 
