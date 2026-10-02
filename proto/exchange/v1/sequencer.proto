@@ -1,0 +1,44 @@
+syntax = "proto3";
+package exchange.v1;
+
+service Sequencer {
+  // Gateway -> sequencer. One long-lived stream per gateway.
+  rpc Submit(stream SubmitRequest) returns (stream SubmitAck);
+  // Engine <- sequencer. One stream per partition.
+  rpc Subscribe(SubscribeRequest) returns (stream SequencedCommand);
+}
+
+message SubmitRequest {
+  string gateway_id = 1;
+  uint64 request_id = 2; // unique per gateway
+  uint32 symbol = 3; // the ONLY field the sequencer reads
+  bytes payload = 4; // an encoded CommandBody; the sequencer never opens it
+}
+
+enum SubmitStatus {
+  SUBMIT_STATUS_UNSPECIFIED = 0;
+  SUBMIT_STATUS_ACCEPTED = 1; // relay: queued. Later: durable on disk.
+  SUBMIT_STATUS_UNKNOWN_SYMBOL = 2;
+  SUBMIT_STATUS_BUSY = 3; // queue full; retry later
+  SUBMIT_STATUS_NOT_RUNNING = 4;
+}
+
+message SubmitAck {
+  uint64 request_id = 1;
+  SubmitStatus status = 2;
+  uint64 seq = 3; // set only when ACCEPTED
+}
+
+message SubscribeRequest {
+  uint32 partition = 1;
+  uint64 from_seq = 2; // first seq wanted. 0 = live (from the next one).
+}
+
+message SequencedCommand {
+  uint64 seq = 1; // per partition, starts at 1, no gaps
+  int64 ts = 2; // the sequencer's clock, milliseconds
+  uint32 symbol = 3;
+  uint64 request_id = 4;
+  string gateway_id = 5; // so replies can find their way back later
+  bytes payload = 6;
+}
