@@ -1,8 +1,9 @@
 find_package(Threads REQUIRED)
 
-add_library(server_core STATIC src/worker.cpp src/router.cpp)
+add_library(server_core STATIC src/worker.cpp src/router.cpp src/codec.cpp)
 target_include_directories(server_core PUBLIC include)
-target_link_libraries(server_core PUBLIC engine Threads::Threads)
+target_link_libraries(server_core PUBLIC engine Threads::Threads PRIVATE
+                      exchange_proto)
 target_compile_features(server_core PUBLIC cxx_std_20)
 target_compile_options(server_core PRIVATE -Wall -Wextra -Wpedantic)
 
