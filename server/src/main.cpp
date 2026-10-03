@@ -160,7 +160,7 @@ void print_help() {
 int main() {
     // Engine time in milliseconds from a clock that never jumps backwards
     // (steady_clock), so the circuit-breaker timers behave.
-    Worker::Clock clock = [] {
+    Router::Clock clock = [] {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now().time_since_epoch())
             .count();
@@ -302,7 +302,9 @@ int main() {
                 continue;
             }
             RequestId req = next_request++;
-            submit(CancelOrder{.request_id = req, .symbol = *sym, .requester = trader,
+            submit(CancelOrder{.request_id = req,
+                               .symbol = *sym,
+                               .requester = trader,
                                .order_id = static_cast<engine::OrderId>(a)},
                    req);
         } else if (verb == "modify" && w.size() == 5 && parse_int(w[2], a) && parse_int(w[3], b) &&
@@ -313,8 +315,12 @@ int main() {
                 continue;
             }
             RequestId req = next_request++;
-            submit(ModifyOrder{.request_id = req, .symbol = *sym, .requester = trader,
-                               .order_id = static_cast<engine::OrderId>(a), .new_price = b, .new_quantity = c},
+            submit(ModifyOrder{.request_id = req,
+                               .symbol = *sym,
+                               .requester = trader,
+                               .order_id = static_cast<engine::OrderId>(a),
+                               .new_price = b,
+                               .new_quantity = c},
                    req);
         } else if (verb == "stop" && (w.size() == 5 || w.size() == 6) && (w[1] == "buy" || w[1] == "sell") &&
                    parse_int(w[3], a) && parse_int(w[4], b) && (w.size() == 5 || parse_int(w[5], c))) {
@@ -341,7 +347,9 @@ int main() {
                 continue;
             }
             RequestId req = next_request++;
-            submit(CancelStop{.request_id = req, .symbol = *sym, .requester = trader,
+            submit(CancelStop{.request_id = req,
+                              .symbol = *sym,
+                              .requester = trader,
                               .order_id = static_cast<engine::OrderId>(a)},
                    req);
         } else {
