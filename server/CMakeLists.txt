@@ -1,6 +1,7 @@
 find_package(Threads REQUIRED)
 
-add_library(server_core STATIC src/worker.cpp src/router.cpp src/codec.cpp)
+add_library(server_core STATIC src/worker.cpp src/router.cpp src/codec.cpp
+            src/sequencer_feed.cpp)
 target_include_directories(server_core PUBLIC include)
 target_link_libraries(server_core PUBLIC engine Threads::Threads PRIVATE
                       exchange_proto)
