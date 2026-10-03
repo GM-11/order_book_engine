@@ -21,6 +21,7 @@ add_executable(server_tests
     test_worker.cpp
     test_router.cpp
     test_codec.cpp
+    test_sequencer_feed.cpp
 )
 target_link_libraries(server_tests PRIVATE server_core exchange_proto
                       Catch2::Catch2WithMain)
