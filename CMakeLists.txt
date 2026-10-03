@@ -7,5 +7,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(CTest)
 add_subdirectory(engine)
-add_subdirectory(proto)
+
+set(EXCHANGE_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../proto" CACHE PATH
+    "Path to the shared proto folder")
+if(NOT TARGET exchange_proto)
+  add_subdirectory(${EXCHANGE_PROTO_DIR} ${CMAKE_BINARY_DIR}/proto)
+endif()
+
 add_subdirectory(server)

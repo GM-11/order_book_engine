@@ -22,7 +22,8 @@ add_executable(server_tests
     test_router.cpp
     test_codec.cpp
 )
-target_link_libraries(server_tests PRIVATE server_core exchange_proto Catch2::Catch2WithMain)
+target_link_libraries(server_tests PRIVATE server_core exchange_proto
+                      Catch2::Catch2WithMain)
 target_compile_options(server_tests PRIVATE -Wall -Wextra -Wpedantic)
 
 include(Catch)
