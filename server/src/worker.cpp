@@ -2,23 +2,20 @@
 #include "engine/event.hpp"
 #include "engine/order.hpp"
 #include "server/commands.hpp"
+#include <algorithm>
 #include <stdexcept>
 namespace server {
 
 template <class> inline constexpr bool always_false = false; // at namespace scope, above run()
 
-Worker::Worker(BlockingQueue<Output> &outbox, Clock clock) : outbox_(outbox), clock_(std::move(clock)) {
-    if (!clock_) {
-        throw std::invalid_argument("Worker needs a clock");
-    }
-}
+Worker::Worker(BlockingQueue<Output> &outbox) : outbox_(outbox) {}
 Worker::~Worker() { stop(); }
 
 void Worker::stop() {
     if (!started_ || stopped_)
         return;
     stopped_ = true;
-    inbox_.push(Shutdown{});
+    inbox_.push(Stamped{.seq = 0, .ts = {}, .command = Shutdown{}});
     thread_.join();
 }
 
@@ -41,14 +38,19 @@ void Worker::start() {
     thread_ = std::jthread([this] { run(); });
 }
 
-void Worker::submit(Command command) { inbox_.push(std::move(command)); }
+void Worker::submit(Stamped item) { inbox_.push(std::move(item)); }
+
+bool Worker::owns(SymbolId symbol) const { return books_.contains(symbol); }
 
 void Worker::run() {
     while (true) {
-        Command command = inbox_.pop();
-        if (std::holds_alternative<Shutdown>(command))
+        Stamped item = inbox_.pop();
+        if (std::holds_alternative<Shutdown>(item.command))
             return;
-        engine::Timestamp now = clock_();
+        // Time must never go backwards for the circuit breaker; the sequencer
+        // guarantees this, but the legacy Router path does not.
+        engine::Timestamp now = std::max(item.ts, last_ts_);
+        last_ts_ = now;
 
         std::visit(
             [&](auto &&arg) {
@@ -69,7 +71,8 @@ void Worker::run() {
 
                 } else if constexpr (std::is_same_v<T, ModifyOrder>) {
                     engine::Book &book = book_for(arg.symbol);
-                    engine::OrderResult result = book.modify_order(arg.order_id, arg.requester, arg.new_price, arg.new_quantity, now);
+                    engine::OrderResult result =
+                        book.modify_order(arg.order_id, arg.requester, arg.new_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
                     outbox_.push(Reply{arg.request_id, arg.symbol, result.reject_reason, result.unaccepted_quantity,
                                        result.rested_price});
@@ -88,8 +91,8 @@ void Worker::run() {
 
                 } else if constexpr (std::is_same_v<T, ModifyStop>) {
                     engine::Book &book = book_for(arg.symbol);
-                    engine::RejectReason result = book.modify_stop_order(arg.order_id, arg.requester, arg.new_stop_price,
-                                                                         arg.new_limit_price, arg.new_quantity, now);
+                    engine::RejectReason result = book.modify_stop_order(
+                        arg.order_id, arg.requester, arg.new_stop_price, arg.new_limit_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
                     outbox_.push(Reply{arg.request_id, arg.symbol, result});
 
@@ -100,7 +103,7 @@ void Worker::run() {
                     static_assert(always_false<T>, "unhandled Command type");
                 }
             },
-            command);
+            item.command);
     }
 }
 
