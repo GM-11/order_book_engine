@@ -6,12 +6,14 @@
 namespace server {
 template <class> inline constexpr bool always_false = false; // at namespace scope, above run()
 
-Router::Router(std::size_t worker_count, Worker::Clock clock) {
+Router::Router(std::size_t worker_count, Clock clock) : clock_(std::move(clock)) {
     if (worker_count <= 0)
         throw std::invalid_argument("Router needs at least one worker");
+    if (!clock_)
+        throw std::invalid_argument("Router needs a clock");
     workers_.reserve(worker_count);
     for (std::size_t i = 0; i < worker_count; ++i)
-        workers_.push_back(std::make_unique<Worker>(outbox_, clock));
+        workers_.push_back(std::make_unique<Worker>(outbox_));
 }
 
 Router::~Router() { shutdown(); }
@@ -72,7 +74,7 @@ SubmitResult Router::submit(Command command) {
     auto it = routes_.find(symbol);
     if (it == routes_.end())
         return SubmitResult::UnknownSymbol;
-    it->second->submit(std::move(command));
+    it->second->submit(Stamped{.seq = 0, .ts = clock_(), .command = std::move(command)});
 
     return SubmitResult::Queued;
 }
