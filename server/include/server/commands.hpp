@@ -59,6 +59,13 @@ struct Shutdown {};
 
 using Command = std::variant<NewOrder, CancelOrder, ModifyOrder, PlaceStop, CancelStop, ModifyStop, Shutdown>;
 
+using Seq = std::uint64_t;
+struct Stamped {
+    Seq seq = 0;
+    engine::Timestamp ts{};
+    Command command;
+};
+
 struct MarketEvent {
     SymbolId symbol;
     engine::EngineEvent event;
