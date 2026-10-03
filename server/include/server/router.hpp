@@ -4,6 +4,7 @@
 #include "server/commands.hpp"
 #include "server/worker.hpp"
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -13,7 +14,9 @@ enum class SubmitResult { Queued, UnknownSymbol, NotRunning };
 
 class Router {
   public:
-    Router(std::size_t worker_count, Worker::Clock clock);
+    using Clock = std::function<engine::Timestamp()>;
+
+    Router(std::size_t worker_count, Clock clock);
     ~Router();
     void add_symbol(SymbolId symbol, std::size_t worker_index, std::unique_ptr<engine::Book> book);
     void start();
@@ -25,6 +28,7 @@ class Router {
     BlockingQueue<Output> outbox_;
     std::vector<std::unique_ptr<Worker>> workers_;
     std::unordered_map<SymbolId, Worker *> routes_;
+    Clock clock_;
     bool started_ = false;
     std::atomic<bool> running_ = false;
 };
