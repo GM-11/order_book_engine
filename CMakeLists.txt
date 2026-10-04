@@ -14,4 +14,11 @@ if(NOT TARGET exchange_proto)
   add_subdirectory(${EXCHANGE_PROTO_DIR} ${CMAKE_BINARY_DIR}/proto)
 endif()
 
+# Shared settings (the instrument list), read by every service at startup.
+set(EXCHANGE_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../config" CACHE PATH
+    "Path to the shared config folder")
+if(NOT TARGET instrument_config)
+  add_subdirectory(${EXCHANGE_CONFIG_DIR} ${CMAKE_BINARY_DIR}/config)
+endif()
+
 add_subdirectory(server)

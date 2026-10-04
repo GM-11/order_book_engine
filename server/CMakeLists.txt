@@ -21,9 +21,9 @@ target_compile_options(cli_common PRIVATE -Wall -Wextra -Wpedantic)
 
 # The runnable server. For now its "gateway" is the keyboard.
 add_executable(exchange_server src/main.cpp)
-target_link_libraries(exchange_server PRIVATE cli_common)
+target_link_libraries(exchange_server PRIVATE cli_common instrument_config)
 target_compile_options(exchange_server PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(engine_node src/engine_node.cpp)
-target_link_libraries(engine_node PRIVATE cli_common)
+target_link_libraries(engine_node PRIVATE cli_common instrument_config)
 target_compile_options(engine_node PRIVATE -Wall -Wextra -Wpedantic)

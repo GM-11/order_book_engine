@@ -43,6 +43,15 @@ cmake --build order_book_engine/build-node -j2
 
 Orders will come from the gateway (not built yet); for now, tests send them. Results such as fills and rejects print in `engine_node`, but do not go back to the sender yet—that is future fan-out work. A fresh node needs **every** command starting at sequence 1, while the relay keeps no history: start the node before sending any orders. Restarting the sequencer after commands have reached a running node causes its feed to stop with `OUT_OF_RANGE` by design; without those commands, it can reconnect.
 
+### Instruments come from one shared file
+
+Which symbols exist, and which worker owns each one, is read at startup from
+`trading-project/config/instruments.json` — the same file the sequencer reads (see `../config/README.md`).
+Nothing is hardcoded. Override the location with `EXCHANGE_INSTRUMENTS=/path/to/instruments.json`.
+Worker `i` owns the instruments whose `partition` is `i`. A bad file stops `engine_node` and `exchange_server` at startup
+with the file, entry and field in the message. If the sequencer runs a different version of the file and sends a symbol
+this engine does not own, the feed stops with "config mismatch" instead of guessing.
+
 ## Core types
 
 ```cpp
