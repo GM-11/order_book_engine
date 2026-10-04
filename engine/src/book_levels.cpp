@@ -124,6 +124,28 @@ DepthSnapshot Book::depth(std::size_t max_levels) const {
     return snap;
 }
 
+BookSnapshot Book::snapshot() const {
+    BookSnapshot snap;
+    snap.as_of_sequence = next_seq_ - 1;
+
+    auto collect = [](const auto &side_map, std::vector<RestingOrder> &out) {
+        for (const auto &[price, level] : side_map)
+            for (const Node *n = level.head; n; n = n->next)
+                out.push_back({n->order.id, n->order.owner_id, price, n->order.quantity, n->order.filled});
+    };
+    collect(bids_, snap.bids);
+    collect(asks_, snap.asks);
+
+    snap.stops.reserve(stop_index_.size());
+    for (const auto *side_map : {&sell_stops_, &buy_stops_})
+        for (const auto &[key, stop] : *side_map)
+            snap.stops.push_back({stop.id, stop.owner_id, stop.side, stop.stop_price, stop.limit_price, stop.quantity});
+
+    snap.last_trade_price = last_trade_price_;
+    snap.halted = halted_;
+    return snap;
+}
+
 bool Book::check_invariants() const {
     std::size_t resting = 0;
 
