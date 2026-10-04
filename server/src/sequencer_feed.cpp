@@ -135,7 +135,8 @@ struct SequencerFeed::Impl {
 
                 worker.submit(Stamped{.seq = command.seq(),
                                       .ts = static_cast<engine::Timestamp>(command.ts()),
-                                      .command = std::move(*decoded.command)});
+                                      .command = std::move(*decoded.command),
+                                      .gateway_id = command.gateway_id()});
                 last = command.seq();
                 already_exists_retries = 0;
             }

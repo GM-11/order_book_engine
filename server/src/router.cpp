@@ -57,8 +57,11 @@ SubmitResult Router::submit(Command command) {
     if (!running_)
         return SubmitResult::NotRunning;
 
+    // Internal commands are never submitted from outside.
     if (std::holds_alternative<Shutdown>(command))
         throw std::invalid_argument("Shutdown command cannot be submitted");
+    if (std::holds_alternative<TakeSnapshot>(command))
+        throw std::invalid_argument("TakeSnapshot command cannot be submitted");
 
     SymbolId symbol = std::visit(
         [&](auto &&arg) -> SymbolId {

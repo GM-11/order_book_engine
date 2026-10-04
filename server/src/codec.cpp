@@ -117,6 +117,8 @@ std::string encode_body(const Command &command) {
                 p->set_new_quantity(arg.new_quantity);
             } else if constexpr (std::is_same_v<T, Shutdown>) {
                 throw std::invalid_argument("Shutdown commands cannot be encoded");
+            } else if constexpr (std::is_same_v<T, TakeSnapshot>) {
+                throw std::invalid_argument("TakeSnapshot commands cannot be encoded");
             } else {
                 static_assert(always_false<T>, "unhandled Command type");
             }
