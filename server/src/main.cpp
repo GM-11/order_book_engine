@@ -1,5 +1,5 @@
 #include "cli/console.hpp"
-#include "cli/symbols.hpp"
+#include "config/instruments.hpp"
 #include "server/commands.hpp"
 #include "server/router.hpp"
 
@@ -34,8 +34,9 @@ std::string upper(std::string s) {
     return s;
 }
 
-void print_help() {
-    say("commands (prices and quantities are whole numbers; tickers: MOOG BANANA TESLO MACROHARD):\n"
+void print_help(const std::string &tickers) {
+    say("commands (prices and quantities are whole numbers; tickers: " + tickers +
+        "):\n"
         "  as <trader>                              act as another trader (self-trades are blocked)\n"
         "  buy|sell <TICKER> <qty> [price]          limit order, or market order if no price\n"
         "  cancel <TICKER> <order_id>\n"
@@ -48,6 +49,19 @@ void print_help() {
 } // namespace
 
 int main() {
+    // --- 0. the instrument list: the same file the sequencer reads ----------
+    const std::string instruments_path = config::instruments_path();
+    config::InstrumentConfig instruments;
+    try {
+        instruments = config::load_instruments(instruments_path);
+    } catch (const config::ConfigError &error) {
+        std::cerr << "exchange_server: " << error.what() << '\n';
+        return 1;
+    }
+    std::string all_tickers; // for 'help'
+    for (const auto &instrument : instruments.instruments)
+        all_tickers += (all_tickers.empty() ? "" : " ") + instrument.ticker;
+
     // Engine time in milliseconds from a clock that never jumps backwards
     // (steady_clock), so the circuit-breaker timers behave.
     Router::Clock clock = [] {
@@ -57,13 +71,14 @@ int main() {
     };
 
     // --- 1. build and configure the router (single thread, before start) ---
-    Router router(cli::kWorkers, clock);
+    Router router(instruments.partitions, clock);        // one worker per partition
     std::unordered_map<std::string, SymbolId> id_of;     // gateway: ticker -> id
     std::unordered_map<SymbolId, std::string> ticker_of; // publisher: id -> ticker
-    for (const auto &cfg : cli::kSymbols) {
-        router.add_symbol(cfg.id, cfg.worker, std::make_unique<engine::Book>(100000, cfg.band_bps));
-        id_of.emplace(std::string(cfg.ticker), cfg.id);
-        ticker_of.emplace(cfg.id, std::string(cfg.ticker));
+    for (const auto &instrument : instruments.instruments) {
+        router.add_symbol(instrument.id, instrument.partition,
+                          std::make_unique<engine::Book>(100000, instrument.band_bps));
+        id_of.emplace(instrument.ticker, instrument.id);
+        ticker_of.emplace(instrument.id, instrument.ticker);
     }
     // Both maps are only read from here on, so two threads may share them.
     router.start();
@@ -104,8 +119,9 @@ int main() {
     engine::OrderId next_order = 1;
     engine::OwnerId trader = 1;
 
-    say("exchange_server: " + std::to_string(std::size(cli::kSymbols)) + " symbols on " +
-        std::to_string(cli::kWorkers) + " workers. Type 'help'.");
+    say("exchange_server: " + std::to_string(instruments.instruments.size()) + " symbols on " +
+        std::to_string(instruments.partitions) + " workers (instruments v" + std::to_string(instruments.version) +
+        " from " + instruments_path + "). Type 'help'.");
 
     auto submit = [&](Command cmd, RequestId req) {
         switch (router.submit(std::move(cmd))) {
@@ -151,7 +167,7 @@ int main() {
         if (verb == "quit" || verb == "exit") {
             break;
         } else if (verb == "help") {
-            print_help();
+            print_help(all_tickers);
         } else if (verb == "as" && w.size() == 2 && parse_int(w[1], a) && a > 0) {
             trader = static_cast<engine::OwnerId>(a);
         } else if ((verb == "buy" || verb == "sell") && (w.size() == 3 || w.size() == 4) && parse_int(w[2], a) &&
