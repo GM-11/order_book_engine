@@ -39,9 +39,9 @@ cmake --build order_book_engine/build-node -j2
 ./order_book_engine/build-node/server/engine_node  # in another; Ctrl-C to stop
 ```
 
-`engine_node [sequencer_address]` defaults to `127.0.0.1:50051`. It prints startup and shutdown messages, reconnect attempts when the sequencer is unavailable, and the resulting market events and replies. If a feed gives up, it shuts down cleanly and exits with code 1.
+`engine_node [sequencer_address] [feed_address]` defaults to `127.0.0.1:50051` and `127.0.0.1:50061`. It reads commands from the sequencer and serves its results on the engine feed (below). It prints startup and shutdown messages, reconnect attempts when the sequencer is unavailable, gateways subscribing and leaving, and the resulting market events and replies (set `ENGINE_NODE_QUIET=1` to stop printing events and replies, e.g. for a load test). If a feed gives up, it shuts down cleanly and exits with code 1.
 
-Orders will come from the gateway (not built yet); for now, tests send them. Results such as fills and rejects print in `engine_node`, but do not go back to the sender yet—that is future fan-out work. A fresh node needs **every** command starting at sequence 1, while the relay keeps no history: start the node before sending any orders. Restarting the sequencer after commands have reached a running node causes its feed to stop with `OUT_OF_RANGE` by design; without those commands, it can reconnect.
+Orders will come from the gateway (not built yet); for now, tests send them. A fresh node needs **every** command starting at sequence 1, while the relay keeps no history: start the node before sending any orders. Restarting the sequencer after commands have reached a running node causes its feed to stop with `OUT_OF_RANGE` by design; without those commands, it can reconnect.
 
 ### Instruments come from one shared file
 
@@ -193,6 +193,43 @@ Real LULD is stricter (no trades outside the band at all; a limit state, then a 
 - `Halted` and `Resumed` are symbol-level. `Resumed` carries no order fields.
 - `price` is a `std::optional<Price>`: empty for a market order's `Accepted` / `Cancelled` and for `Resumed`. Stop events (`StopAccepted`, `StopModified`, `StopTriggered`, `StopCancelled`) carry the stop price in `price` and a stop-limit's limit in `limit_price`.
 
+## Engine feed (the output side)
+
+Gateways get everything the engine produces from one gRPC stream each:
+`EngineFeed.Subscribe(gateway_id, symbols)` in `../proto/exchange/v1/engine_feed.proto`
+(empty `symbols` = every symbol). This link is internal: events keep owner ids, and the gateway
+must strip them before anything goes public.
+
+For each symbol a subscriber first gets one `BookSnapshot`, then every event for that symbol
+numbered `as_of_seq + 1`, `+ 2`, ... with no gaps. It also gets every `Reply` whose `gateway_id`
+is its own (the sequencer stamps `gateway_id` on each command and the worker copies it into the
+reply). Replies are not numbered and never resent; a reply for a gateway that is not connected is
+dropped and counted.
+
+- **Snapshot = the whole book, order by order** (`Book::snapshot()`): every resting order in queue
+  order with remaining and filled quantity, dormant stops, last trade price, halted flag, and
+  `as_of_sequence`. Per-price totals would not be enough: the events name individual orders, and a
+  gateway needs each owner's open orders after it restarts.
+- **Only the worker thread touches a Book.** A snapshot is requested with an internal `TakeSnapshot`
+  command in the worker's inbox. The worker answers into the same outbox as its events, so every
+  event after the snapshot in the outbox is newer than it. `TakeSnapshot` changes nothing, so it
+  needs no sequence number and is never journaled; replaying inputs still gives the same events.
+- **No replay.** To recover from anything (a dropped connection, a gap, being dropped), subscribe
+  again and start from fresh snapshots.
+- **Slow gateways are dropped, never waited for.** `MarketDataPublisher` (one thread) drains the
+  outbox into one bounded queue per subscriber (65,536 items). A full queue ends that subscription
+  (`RESOURCE_EXHAUSTED`); everyone else is unaffected and the engine never slows down.
+- **One stream per gateway id** (`ALREADY_EXISTS` otherwise), because replies need one destination.
+  Other codes: `INVALID_ARGUMENT` empty id, `NOT_FOUND` unknown symbol, `UNAVAILABLE` shutting down.
+- Shutdown order: sequencer feeds -> workers -> outbox pill -> publisher (ends every subscription)
+  -> feed server.
+
+Tested by a replica (`engine/tests/book_replica.hpp`) that rebuilds a book from snapshot + events
+only: in a 6,000-step random run (halts and stop cascades included) it equals `Book::snapshot()`
+after every step, both from the start and when joining halfway; and with 2 workers, 4 producer
+threads and gateways joining mid-stream, every subscriber's replica of every book equals the final
+book and each gateway got exactly one reply per request.
+
 ## Book queries
 
 ```cpp
@@ -216,4 +253,4 @@ Only resting limit orders consume pool nodes. Stop orders are stored separately.
 
 - `engine/src/book.cpp`: order entry, matching, modify, cancel.
 - `engine/src/stops.cpp`: stop and stop-limit entry, cancel, modify, trigger and firing.
-- `engine/src/book_levels.cpp`: price levels (linking, totals), depth snapshots, validation helpers, `check_invariants`.
+- `engine/src/book_levels.cpp`: price levels (linking, totals), depth and full snapshots, validation helpers, `check_invariants`.
