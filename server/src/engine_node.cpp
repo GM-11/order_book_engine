@@ -1,12 +1,15 @@
 #include "cli/console.hpp"
 #include "config/instruments.hpp"
 #include "server/blocking_queue.hpp"
+#include "server/engine_feed_server.hpp"
+#include "server/publisher.hpp"
 #include "server/sequencer_feed.hpp"
 #include "server/worker.hpp"
 
 #include <atomic>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <pthread.h>
@@ -24,18 +27,19 @@ struct ShutdownInOrder {
     std::vector<std::unique_ptr<server::SequencerFeed>> &feeds;
     std::vector<std::unique_ptr<server::Worker>> &workers;
     server::BlockingQueue<server::Output> &outbox;
-    std::jthread &publisher;
+    server::MarketDataPublisher &publisher;
+    server::EngineFeedServer &feed_server;
 
     ~ShutdownInOrder() {
         // Feeds must not enqueue into stopped workers; workers must finish publishing
-        // every output before the publisher sees the poison pill.
+
         for (auto &feed : feeds)
             feed->stop();
         for (auto &worker : workers)
             worker->stop();
         outbox.push(server::OutboxClosed{});
-        if (publisher.joinable())
-            publisher.join();
+        publisher.join();
+        feed_server.stop();
     }
 };
 
@@ -55,6 +59,9 @@ int main(int argc, char *argv[]) {
 
     try {
         const std::string address = argc > 1 ? argv[1] : "127.0.0.1:50051";
+        const std::string feed_address = argc > 2 ? argv[2] : "127.0.0.1:50061";
+        const char *quiet_env = std::getenv("ENGINE_NODE_QUIET");
+        const bool quiet = quiet_env != nullptr && std::string(quiet_env) == "1";
 
         // The same instrument list the sequencer reads: partition i is worker i.
         const std::string instruments_path = config::instruments_path();
@@ -68,30 +75,43 @@ int main(int argc, char *argv[]) {
             workers.push_back(std::make_unique<server::Worker>(outbox));
 
         std::unordered_map<server::SymbolId, std::string> ticker_of;
+        std::unordered_map<server::SymbolId, server::Worker *> worker_of;
+        std::vector<server::SymbolId> symbols;
         for (const auto &instrument : instruments.instruments) {
-            workers.at(instrument.partition)
-                ->add_book(instrument.id, std::make_unique<engine::Book>(100000, instrument.band_bps));
+            server::Worker *worker = workers.at(instrument.partition).get();
+            worker->add_book(instrument.id, std::make_unique<engine::Book>(100000, instrument.band_bps));
             ticker_of.emplace(instrument.id, instrument.ticker);
+            worker_of.emplace(instrument.id, worker);
+            symbols.push_back(instrument.id);
         }
         for (auto &worker : workers)
             worker->start();
 
-        std::jthread publisher([&outbox, &ticker_of] {
-            while (true) {
-                server::Output out = outbox.pop();
-                if (std::holds_alternative<server::OutboxClosed>(out))
-                    return;
+        server::PublisherOptions publisher_options;
+        if (!quiet)
+            publisher_options.tap = [&ticker_of](const server::Output &out) {
                 if (auto *market = std::get_if<server::MarketEvent>(&out))
                     cli::say(cli::format_event(ticker_of.at(market->symbol), market->event));
                 else if (auto *reply = std::get_if<server::Reply>(&out))
                     cli::say(cli::format_reply(*reply));
-            }
-        });
+            };
+        server::MarketDataPublisher publisher(
+            outbox, symbols,
+            [&worker_of](server::SymbolId symbol, server::SubscriberId subscriber) {
+                worker_of.at(symbol)->submit(
+                    server::Stamped{.seq = 0, .ts = {}, .command = server::TakeSnapshot{symbol, subscriber}});
+            },
+            std::move(publisher_options));
+        publisher.start();
+        server::EngineFeedServer feed_server(
+            publisher, server::FeedServerOptions{.address = feed_address,
+                                                 .log = [](const std::string &message) { cli::say(message); }});
 
         std::atomic<bool> failed{false};
         {
             std::vector<std::unique_ptr<server::SequencerFeed>> feeds;
-            ShutdownInOrder shutdown_guard{feeds, workers, outbox, publisher};
+            ShutdownInOrder shutdown_guard{feeds, workers, outbox, publisher, feed_server};
+            feed_server.start(); // inside the guard: a bind failure still shuts down in order
             feeds.reserve(worker_count);
             for (std::size_t i = 0; i < worker_count; ++i) {
                 server::FeedOptions options{
@@ -112,7 +132,8 @@ int main(int argc, char *argv[]) {
             // Print before starting feeds so retry logs cannot precede the startup line.
             cli::say("engine_node: " + std::to_string(instruments.instruments.size()) + " symbols on " +
                      std::to_string(worker_count) + " workers (instruments v" + std::to_string(instruments.version) +
-                     " from " + instruments_path + "), sequencer at " + address + ". Ctrl-C to stop.");
+                     " from " + instruments_path + "), sequencer at " + address + ", engine feed on " + feed_address +
+                     " (port " + std::to_string(feed_server.port()) + "). Ctrl-C to stop.");
             for (auto &feed : feeds)
                 feed->start();
 
