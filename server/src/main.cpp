@@ -1,3 +1,5 @@
+#include "cli/console.hpp"
+#include "cli/symbols.hpp"
 #include "server/commands.hpp"
 #include "server/router.hpp"
 
@@ -16,121 +18,9 @@
 #include <vector>
 
 using namespace server;
+using cli::say;
 
 namespace {
-
-// ------------------------------------------------------------ symbol config
-// Read once at startup; symbols can only be added before router.start().
-// Later this moves to a config file.
-struct SymbolConfig {
-    std::string_view ticker;
-    SymbolId id;
-    std::size_t worker;    // which worker thread owns this symbol's Book
-    std::int64_t band_bps; // circuit-breaker band, basis points
-};
-
-constexpr SymbolConfig kSymbols[] = {
-    {"MOOG", 1, 0, 1000},
-    {"BANANA", 2, 0, 1000},
-    {"TESLO", 3, 1, 1000},
-    {"MACROHARD", 4, 1, 1000},
-};
-constexpr std::size_t kWorkers = 2;
-
-// ------------------------------------------------------------------ printing
-// Two threads write to the screen (gateway and publisher). Each printed line
-// takes this lock so lines never interleave mid-way.
-std::mutex g_print_mu;
-
-void say(const std::string &line) {
-    std::lock_guard lock(g_print_mu);
-    std::cout << line << '\n' << std::flush;
-}
-
-std::string_view to_string(engine::EventKind k) {
-    using K = engine::EventKind;
-    switch (k) {
-    case K::Accepted:
-        return "ACCEPTED";
-    case K::Rested:
-        return "RESTED";
-    case K::Trade:
-        return "TRADE";
-    case K::Cancelled:
-        return "CANCELLED";
-    case K::Modified:
-        return "MODIFIED";
-    case K::Replaced:
-        return "REPLACED";
-    case K::StopAccepted:
-        return "STOP_ACCEPTED";
-    case K::StopTriggered:
-        return "STOP_TRIGGERED";
-    case K::StopCancelled:
-        return "STOP_CANCELLED";
-    case K::StopModified:
-        return "STOP_MODIFIED";
-    case K::Halted:
-        return "HALTED";
-    case K::Resumed:
-        return "RESUMED";
-    }
-    return "?";
-}
-
-std::string_view to_string(engine::RejectReason r) {
-    using R = engine::RejectReason;
-    switch (r) {
-    case R::None:
-        return "None";
-    case R::InvalidPrice:
-        return "InvalidPrice";
-    case R::InvalidQuantity:
-        return "InvalidQuantity";
-    case R::SelfTrade:
-        return "SelfTrade";
-    case R::PoolExhausted:
-        return "PoolExhausted";
-    case R::SymbolHalted:
-        return "SymbolHalted";
-    case R::UnknownOrder:
-        return "UnknownOrder";
-    case R::DuplicateOrderId:
-        return "DuplicateOrderId";
-    case R::TooLate:
-        return "TooLate";
-    case R::PriceBand:
-        return "PriceBand";
-    case R::PriceCollar:
-        return "PriceCollar";
-    case R::StopWouldTrigger:
-        return "StopWouldTrigger";
-    }
-    return "?";
-}
-
-std::string format_event(std::string_view ticker, const engine::EngineEvent &e) {
-    std::ostringstream s;
-    s << "  [" << ticker << " #" << e.sequence_number << "] " << to_string(e.kind);
-    switch (e.kind) {
-    case engine::EventKind::Trade:
-        s << ' ' << e.quantity << " @ " << e.price.value_or(0) << "  (aggressor order " << e.order_id << ' '
-          << engine::to_string(e.side) << ", resting order " << e.passive_id << "; buyer " << e.owner_id << ", seller "
-          << e.other_owner << ')';
-        break;
-    case engine::EventKind::Halted:
-    case engine::EventKind::Resumed:
-        break;
-    default:
-        s << " order " << e.order_id << ' ' << engine::to_string(e.side) << ' ' << e.quantity;
-        if (e.price)
-            s << " @ " << *e.price;
-        if (e.limit_price)
-            s << " limit " << *e.limit_price;
-        break;
-    }
-    return s.str();
-}
 
 // ------------------------------------------------------------------- parsing
 bool parse_int(std::string_view text, std::int64_t &out) {
@@ -167,10 +57,10 @@ int main() {
     };
 
     // --- 1. build and configure the router (single thread, before start) ---
-    Router router(kWorkers, clock);
+    Router router(cli::kWorkers, clock);
     std::unordered_map<std::string, SymbolId> id_of;     // gateway: ticker -> id
     std::unordered_map<SymbolId, std::string> ticker_of; // publisher: id -> ticker
-    for (const auto &cfg : kSymbols) {
+    for (const auto &cfg : cli::kSymbols) {
         router.add_symbol(cfg.id, cfg.worker, std::make_unique<engine::Book>(100000, cfg.band_bps));
         id_of.emplace(std::string(cfg.ticker), cfg.id);
         ticker_of.emplace(cfg.id, std::string(cfg.ticker));
@@ -186,19 +76,9 @@ int main() {
             if (std::holds_alternative<OutboxClosed>(out))
                 return;
             if (auto *m = std::get_if<MarketEvent>(&out)) {
-                say(format_event(ticker_of.at(m->symbol), m->event));
+                say(cli::format_event(ticker_of.at(m->symbol), m->event));
             } else if (auto *r = std::get_if<Reply>(&out)) {
-                std::ostringstream s;
-                s << "  reply to request " << r->request_id << ": ";
-                if (r->reject_reason == engine::RejectReason::None)
-                    s << "OK";
-                else
-                    s << "REJECTED (" << to_string(r->reject_reason) << ')';
-                if (r->unaccepted_quantity > 0)
-                    s << ", unaccepted qty " << r->unaccepted_quantity;
-                if (r->rested_price)
-                    s << ", rested at band edge " << *r->rested_price;
-                say(s.str());
+                say(cli::format_reply(*r));
             }
         }
     });
@@ -224,8 +104,8 @@ int main() {
     engine::OrderId next_order = 1;
     engine::OwnerId trader = 1;
 
-    say("exchange_server: " + std::to_string(std::size(kSymbols)) + " symbols on " + std::to_string(kWorkers) +
-        " workers. Type 'help'.");
+    say("exchange_server: " + std::to_string(std::size(cli::kSymbols)) + " symbols on " +
+        std::to_string(cli::kWorkers) + " workers. Type 'help'.");
 
     auto submit = [&](Command cmd, RequestId req) {
         switch (router.submit(std::move(cmd))) {
@@ -244,7 +124,7 @@ int main() {
     std::string line;
     while (true) {
         {
-            std::lock_guard lock(g_print_mu);
+            std::lock_guard lock(cli::g_print_mu);
             std::cout << "trader " << trader << "> " << std::flush;
         }
         if (!std::getline(std::cin, line))

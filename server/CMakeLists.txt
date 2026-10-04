@@ -14,7 +14,16 @@ if(SERVER_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
+add_library(cli_common STATIC src/cli/console.cpp)
+target_include_directories(cli_common PUBLIC src)
+target_link_libraries(cli_common PUBLIC server_core)
+target_compile_options(cli_common PRIVATE -Wall -Wextra -Wpedantic)
+
 # The runnable server. For now its "gateway" is the keyboard.
 add_executable(exchange_server src/main.cpp)
-target_link_libraries(exchange_server PRIVATE server_core)
+target_link_libraries(exchange_server PRIVATE cli_common)
 target_compile_options(exchange_server PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(engine_node src/engine_node.cpp)
+target_link_libraries(engine_node PRIVATE cli_common)
+target_compile_options(engine_node PRIVATE -Wall -Wextra -Wpedantic)

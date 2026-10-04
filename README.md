@@ -26,6 +26,23 @@ cmake --build build
 
 The static library target is `engine`.
 
+## Running engine_node
+
+From `trading-project/`, build and start the sequencer first, then the engine node:
+
+```sh
+cmake -S sequencer -B sequencer/build
+cmake --build sequencer/build -j2
+cmake -S order_book_engine -B order_book_engine/build-node
+cmake --build order_book_engine/build-node -j2
+./sequencer/build/sequencer                        # in one terminal
+./order_book_engine/build-node/server/engine_node  # in another; Ctrl-C to stop
+```
+
+`engine_node [sequencer_address]` defaults to `127.0.0.1:50051`. It prints startup and shutdown messages, reconnect attempts when the sequencer is unavailable, and the resulting market events and replies. If a feed gives up, it shuts down cleanly and exits with code 1.
+
+Orders will come from the gateway (not built yet); for now, tests send them. Results such as fills and rejects print in `engine_node`, but do not go back to the sender yet—that is future fan-out work. A fresh node needs **every** command starting at sequence 1, while the relay keeps no history: start the node before sending any orders. Restarting the sequencer after commands have reached a running node causes its feed to stop with `OUT_OF_RANGE` by design; without those commands, it can reconnect.
+
 ## Core types
 
 ```cpp
