@@ -7,6 +7,8 @@
 // are race-free. Run under -fsanitize=thread to check the concurrent parts.
 
 #include "server/worker.hpp"
+#include "server/codec.hpp"
+#include "server/router.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -331,4 +333,85 @@ TEST_CASE("stop() drains, joins, and is safe to call again or before start", "[w
     REQUIRE(replies_of(drain(out)).size() == 500);
     w.stop(); // second call: no second pill, no second join
     REQUIRE(drain(out).empty());
+}
+
+// ---- Output side: gateway ids and snapshots --------------------------------
+
+TEST_CASE("A reply carries the gateway id of the command that caused it", "[worker]") {
+    BlockingQueue<Output> outbox;
+    {
+        Worker worker(outbox);
+        worker.add_book(1, std::make_unique<engine::Book>());
+        worker.start();
+        worker.submit(Stamped{.seq = 1,
+                              .ts = 5,
+                              .command = NewOrder{7, 1, limit(1, 1, engine::Side::Buy, 100, 5)},
+                              .gateway_id = "gw-a"});
+        worker.submit(Stamped{.seq = 2,
+                              .ts = 6,
+                              .command = CancelOrder{8, 1, 1, 1},
+                              .gateway_id = "gw-b"});
+    }
+    const auto replies = replies_of(drain(outbox));
+    REQUIRE(replies.size() == 2);
+    CHECK(replies[0].request_id == 7);
+    CHECK(replies[0].gateway_id == "gw-a");
+    CHECK(replies[1].request_id == 8);
+    CHECK(replies[1].gateway_id == "gw-b");
+}
+
+TEST_CASE("TakeSnapshot answers in order with the book's events and changes nothing", "[worker]") {
+    BlockingQueue<Output> outbox;
+    {
+        Worker worker(outbox);
+        worker.add_book(1, std::make_unique<engine::Book>());
+        worker.add_book(2, std::make_unique<engine::Book>());
+        worker.start();
+        submit(worker, NewOrder{1, 1, limit(1, 1, engine::Side::Buy, 100, 5)}, 10);
+        submit(worker, TakeSnapshot{1, 42});
+        // Stamped earlier than the first order (the legacy path allows it):
+        // the worker must still use its own latest time, 10.
+        submit(worker, NewOrder{2, 1, limit(2, 2, engine::Side::Sell, 100, 2)}, 9);
+    }
+    const auto out = drain(outbox);
+
+    // Find the snapshot and check where it sits in the outbox.
+    std::size_t at = out.size();
+    for (std::size_t i = 0; i < out.size(); ++i)
+        if (std::holds_alternative<SnapshotReady>(out[i]))
+            at = i;
+    REQUIRE(at < out.size());
+    const auto &ready = std::get<SnapshotReady>(out[at]);
+    CHECK(ready.symbol == 1);
+    CHECK(ready.subscriber == 42);
+    REQUIRE(ready.snapshot.bids.size() == 1);
+    CHECK(ready.snapshot.bids[0].quantity == 5);
+
+    // Every event before it is covered by it; every event after it is newer.
+    for (std::size_t i = 0; i < out.size(); ++i)
+        if (const auto *m = std::get_if<MarketEvent>(&out[i])) {
+            if (m->symbol != 1)
+                continue;
+            if (i < at)
+                CHECK(m->event.sequence_number <= ready.snapshot.as_of_sequence);
+            else
+                CHECK(m->event.sequence_number > ready.snapshot.as_of_sequence);
+        }
+    const auto events = events_of(out);
+    REQUIRE_FALSE(events.empty());
+    // The trade after the snapshot is the very next number: nothing in between.
+    bool found_next = false;
+    for (const auto &m : events)
+        found_next |= m.event.sequence_number == ready.snapshot.as_of_sequence + 1;
+    CHECK(found_next);
+    // The snapshot did not touch the clock: time still never goes backwards.
+    CHECK(events.back().event.ts == 10);
+}
+
+TEST_CASE("TakeSnapshot is internal: the router and the codec refuse it", "[worker]") {
+    Router router(1, [] { return engine::Timestamp{0}; });
+    router.add_symbol(1, 0, std::make_unique<engine::Book>());
+    router.start();
+    CHECK_THROWS_AS(router.submit(TakeSnapshot{1, 1}), std::invalid_argument);
+    CHECK_THROWS_AS(encode_body(TakeSnapshot{1, 1}), std::invalid_argument);
 }

@@ -23,14 +23,16 @@ add_executable(server_tests
     test_codec.cpp
     test_sequencer_feed.cpp
     test_instrument_config.cpp
+    test_publisher.cpp
+    test_feed_codec.cpp
+    test_engine_feed.cpp
 )
-target_link_libraries(server_tests PRIVATE server_core exchange_proto instrument_config
-                      Catch2::Catch2WithMain)
+target_link_libraries(server_tests PRIVATE server_core exchange_proto
+                      instrument_config Catch2::Catch2WithMain)
 target_compile_options(server_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(server_tests PRIVATE
+                           ${PROJECT_SOURCE_DIR}/engine/tests)
 
 include(Catch)
-# PRE_TEST: list the tests when ctest runs, not right after linking. A
-# ThreadSanitizer build can crash at startup on some kernels (high ASLR
-# entropy; run it via `setarch $(uname -m) -R`),
-# and POST_BUILD discovery would turn that into a build failure.
+
 catch_discover_tests(server_tests DISCOVERY_MODE PRE_TEST)

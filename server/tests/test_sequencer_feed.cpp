@@ -297,6 +297,20 @@ TEST_CASE("feed: commands reach the worker in order, with the sequencer's ts", "
     CHECK(requests[0].from_seq() == 1); // fresh engine: everything from the start
 }
 
+TEST_CASE("feed: each reply carries the gateway id the sequencer stamped", "[feed]") {
+    Rig rig;
+    auto from_b = order(2, 1001, 12);
+    from_b.set_gateway_id("gw-2");
+    rig.server.fake.script({hold({order(1, 1000, 11), from_b})});
+    SequencerFeed feed(rig.worker, rig.options());
+    feed.start();
+
+    const auto seen = wait_for_replies(rig.outbox, 2);
+    REQUIRE(seen.replies.size() == 2);
+    CHECK(seen.replies[0].gateway_id == "gw-1");
+    CHECK(seen.replies[1].gateway_id == "gw-2");
+}
+
 TEST_CASE("feed: subscribes from options.from_seq and expects that seq first", "[feed]") {
     Rig rig;
     rig.server.fake.script({hold({order(5, 1, 5), order(6, 2, 6)})});
