@@ -47,8 +47,10 @@ void Worker::run() {
         Stamped item = inbox_.pop();
         if (std::holds_alternative<Shutdown>(item.command))
             return;
-        // Time must never go backwards for the circuit breaker; the sequencer
-        // guarantees this, but the legacy Router path does not.
+        if (const auto *take = std::get_if<TakeSnapshot>(&item.command)) {
+            outbox_.push(SnapshotReady{take->symbol, take->subscriber, book_for(take->symbol).snapshot()});
+            continue;
+        }
         engine::Timestamp now = std::max(item.ts, last_ts_);
         last_ts_ = now;
 
@@ -60,43 +62,43 @@ void Worker::run() {
                     engine::Book &book = book_for(arg.symbol);
                     engine::OrderResult result = book.add_order(arg.order, now);
                     publish(arg.symbol, book);
-                    outbox_.push(Reply{arg.request_id, arg.symbol, result.reject_reason, result.unaccepted_quantity,
-                                       result.rested_price});
+                    reply(item, arg.request_id, arg.symbol, result.reject_reason, result.unaccepted_quantity,
+                          result.rested_price);
 
                 } else if constexpr (std::is_same_v<T, CancelOrder>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.cancel_order(arg.order_id, arg.requester, now);
                     publish(arg.symbol, book);
-                    outbox_.push(Reply{arg.request_id, arg.symbol, result});
+                    reply(item, arg.request_id, arg.symbol, result);
 
                 } else if constexpr (std::is_same_v<T, ModifyOrder>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::OrderResult result =
                         book.modify_order(arg.order_id, arg.requester, arg.new_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
-                    outbox_.push(Reply{arg.request_id, arg.symbol, result.reject_reason, result.unaccepted_quantity,
-                                       result.rested_price});
+                    reply(item, arg.request_id, arg.symbol, result.reject_reason, result.unaccepted_quantity,
+                          result.rested_price);
 
                 } else if constexpr (std::is_same_v<T, PlaceStop>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.place_stop_order(arg.stop, now);
                     publish(arg.symbol, book);
-                    outbox_.push(Reply{arg.request_id, arg.symbol, result});
+                    reply(item, arg.request_id, arg.symbol, result);
 
                 } else if constexpr (std::is_same_v<T, CancelStop>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.cancel_stop_order(arg.order_id, arg.requester, now);
                     publish(arg.symbol, book);
-                    outbox_.push(Reply{arg.request_id, arg.symbol, result});
+                    reply(item, arg.request_id, arg.symbol, result);
 
                 } else if constexpr (std::is_same_v<T, ModifyStop>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.modify_stop_order(
                         arg.order_id, arg.requester, arg.new_stop_price, arg.new_limit_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
-                    outbox_.push(Reply{arg.request_id, arg.symbol, result});
+                    reply(item, arg.request_id, arg.symbol, result);
 
-                } else if constexpr (std::is_same_v<T, Shutdown>) {
+                } else if constexpr (std::is_same_v<T, Shutdown> || std::is_same_v<T, TakeSnapshot>) {
                     // Handled before std::visit; nothing to do here.
 
                 } else {
@@ -105,6 +107,16 @@ void Worker::run() {
             },
             item.command);
     }
+}
+
+void Worker::reply(const Stamped &item, RequestId request_id, SymbolId symbol, engine::RejectReason reason,
+                   engine::Quantity unaccepted, std::optional<engine::Price> rested_price) {
+    outbox_.push(Reply{.request_id = request_id,
+                       .symbol = symbol,
+                       .reject_reason = reason,
+                       .unaccepted_quantity = unaccepted,
+                       .rested_price = rested_price,
+                       .gateway_id = item.gateway_id});
 }
 
 void Worker::publish(SymbolId symbol, engine::Book &book) {
