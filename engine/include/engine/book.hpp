@@ -45,6 +45,35 @@ struct DepthSnapshot {
     std::vector<DepthLevel> asks; // best (lowest) price first
 };
 
+struct RestingOrder {
+    OrderId order_id;
+    OwnerId owner_id;
+    Price price;
+    Quantity quantity; // remaining (still on the book)
+    Quantity filled;   // filled so far, over the order's whole life
+    bool operator==(const RestingOrder &) const = default;
+};
+
+struct DormantStop {
+    OrderId order_id;
+    OwnerId owner_id;
+    Side side;
+    Price stop_price;
+    std::optional<Price> limit_price; // empty = stop-market
+    Quantity quantity;
+    bool operator==(const DormantStop &) const = default;
+};
+
+struct BookSnapshot {
+    SequenceNumber as_of_sequence; // 0 = no events yet
+    std::vector<RestingOrder> bids;
+    std::vector<RestingOrder> asks;
+    std::vector<DormantStop> stops;
+    std::optional<Price> last_trade_price;
+
+    bool halted;
+};
+
 class Book {
   public:
     explicit Book(std::size_t pool_capacity = 100000, std::int64_t band_bps = 1000, Timestamp grace_period_ms = 2000,
@@ -63,10 +92,10 @@ class Book {
     RejectReason cancel_order(OrderId order_id, OwnerId requester, Timestamp now);
     std::optional<Price> best_bid() const;
     std::optional<Price> best_ask() const;
-    // Top max_levels price levels per side, aggregated. O(max_levels).
+
     DepthSnapshot depth(std::size_t max_levels) const;
-    // Slow full audit of the book's internal consistency. For tests and
-    // debugging only, never on the matching path.
+
+    BookSnapshot snapshot() const;
     bool check_invariants() const;
 
     // Rejects with StopWouldTrigger if the last trade is already at or
