@@ -19,7 +19,6 @@ struct FeedOptions {
     std::chrono::milliseconds retry_delay{200};
     int max_already_exists_retries = 50;
     std::function<void(const std::string &)> log;
-    // Called once when the feed gives up. Runs on the feed thread; it may call stop().
     std::function<void(const std::string &)> on_fatal;
 };
 

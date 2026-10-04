@@ -5,6 +5,7 @@
 #include "server/blocking_queue.hpp"
 #include "server/commands.hpp"
 #include <memory>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 namespace server {
@@ -27,6 +28,8 @@ class Worker {
     void run(); // the thread's loop
     engine::Book &book_for(SymbolId symbol);
     void publish(SymbolId symbol, engine::Book &book); // drain events -> outbox
+    void reply(const Stamped &item, RequestId request_id, SymbolId symbol, engine::RejectReason reason,
+               engine::Quantity unaccepted = 0, std::optional<engine::Price> rested_price = std::nullopt);
 
     BlockingQueue<Stamped> inbox_;
     std::unordered_map<SymbolId, std::unique_ptr<engine::Book>> books_;
