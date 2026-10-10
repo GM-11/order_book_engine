@@ -31,7 +31,10 @@ struct SequencerFeed::Impl {
         if (started)
             throw std::logic_error("SequencerFeed already started");
         started = true;
-        thread = std::thread([this] { run(); });
+        thread = std::thread([this] {
+            feed_thread_id.store(std::this_thread::get_id());
+            run();
+        });
     }
 
     void stop() {
@@ -44,7 +47,11 @@ struct SequencerFeed::Impl {
         retry_cv.notify_all();
         // stop() may be called from on_fatal, which runs on the feed thread itself. A thread
         // cannot join itself, so then we only request the stop; the destructor joins later.
-        if (thread.joinable() && thread.get_id() != std::this_thread::get_id())
+        // That check must not read `thread`: start() may still be assigning it.
+        if (std::this_thread::get_id() == feed_thread_id.load())
+            return;
+        std::lock_guard lock(state_mutex); // start() writes `thread` under it
+        if (thread.joinable())
             thread.join();
     }
 
@@ -192,6 +199,7 @@ struct SequencerFeed::Impl {
     bool stopping = false;
     std::mutex state_mutex;
     bool started = false;
+    std::atomic<std::thread::id> feed_thread_id{};
     std::thread thread;
 };
 
