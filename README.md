@@ -195,16 +195,21 @@ Real LULD is stricter (no trades outside the band at all; a limit state, then a 
 
 ## Engine feed (the output side)
 
-Gateways get everything the engine produces from one gRPC stream each:
-`EngineFeed.Subscribe(gateway_id, symbols)` in `../proto/exchange/v1/engine_feed.proto`
-(empty `symbols` = every symbol). This link is internal: events keep owner ids, and the gateway
+Two gRPC streams in `../proto/exchange/v1/engine_feed.proto`, one for public data and one for
+private answers. This link is internal: events and replies keep owner/account ids, and gateways
 must strip them before anything goes public.
 
-For each symbol a subscriber first gets one `BookSnapshot`, then every event for that symbol
-numbered `as_of_seq + 1`, `+ 2`, ... with no gaps. It also gets every `Reply` whose `gateway_id`
-is its own (the sequencer stamps `gateway_id` on each command and the worker copies it into the
-reply). Replies are not numbered and never resent; a reply for a gateway that is not connected is
-dropped and counted.
+- `EngineFeed.Subscribe(gateway_id, symbols)` (empty `symbols` = every symbol), used by the
+  market-data gateway. For each symbol a subscriber first gets one `BookSnapshot`, then every event
+  for that symbol numbered `as_of_seq + 1`, `+ 2`, ... with no gaps. No replies.
+- `EngineFeed.SubscribeReplies(gateway_id)`, used by the order gateway: only the `Reply`s whose
+  `gateway_id` is its own (the sequencer stamps `gateway_id` on each command and the worker copies
+  it into the reply). No snapshots, no events. Replies are not numbered and never resent; a reply
+  for a gateway with no replies stream is dropped and counted.
+
+Why two streams: each subscriber has its own bounded queue. When replies shared a queue with market
+events, a burst of events (a crash on a busy symbol) could fill it, get the gateway dropped, and
+lose the replies queued behind the events. Now a market burst can only drop a market stream.
 
 - **Snapshot = the whole book, order by order** (`Book::snapshot()`): every resting order in queue
   order with remaining and filled quantity, dormant stops, last trade price, halted flag, and
@@ -219,8 +224,10 @@ dropped and counted.
 - **Slow gateways are dropped, never waited for.** `MarketDataPublisher` (one thread) drains the
   outbox into one bounded queue per subscriber (65,536 items). A full queue ends that subscription
   (`RESOURCE_EXHAUSTED`); everyone else is unaffected and the engine never slows down.
-- **One stream per gateway id** (`ALREADY_EXISTS` otherwise), because replies need one destination.
-  Other codes: `INVALID_ARGUMENT` empty id, `NOT_FOUND` unknown symbol, `UNAVAILABLE` shutting down.
+- **One stream of each kind per gateway id** (`ALREADY_EXISTS` otherwise); replies need one
+  destination. The two kinds have separate id namespaces. Other codes: `INVALID_ARGUMENT` empty id,
+  `NOT_FOUND` unknown symbol (Subscribe), `UNAVAILABLE` shutting down. A dropped replies stream
+  (`RESOURCE_EXHAUSTED`) loses its queued replies: the gateway treats those outcomes as unknown.
 - Shutdown order: sequencer feeds -> workers -> outbox pill -> publisher (ends every subscription)
   -> feed server.
 
@@ -228,7 +235,8 @@ Tested by a replica (`engine/tests/book_replica.hpp`) that rebuilds a book from 
 only: in a 6,000-step random run (halts and stop cascades included) it equals `Book::snapshot()`
 after every step, both from the start and when joining halfway; and with 2 workers, 4 producer
 threads and gateways joining mid-stream, every subscriber's replica of every book equals the final
-book and each gateway got exactly one reply per request.
+book, no market stream carries a reply, and each gateway's replies stream got exactly one reply per
+request.
 
 ## Book queries
 
