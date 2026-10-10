@@ -97,20 +97,36 @@ MarketDataPublisher::SubscribeResult MarketDataPublisher::subscribe(std::string 
         std::lock_guard lock(mutex_);
         if (closed_)
             return {nullptr, SubscribeError::Closed};
-        if (by_gateway_.contains(gateway_id))
+        if (market_by_gateway_.contains(gateway_id))
             return {nullptr, SubscribeError::GatewayAlreadySubscribed};
         const SubscriberId id = next_id_++;
         sub = std::make_shared<Subscription>(id, gateway_id, options_.queue_capacity);
-        Subscriber entry{sub, {}};
+        Subscriber entry{sub, SubscriberKind::Market, {}};
         for (SymbolId s : symbols)
             entry.live.emplace(s, false); // waiting for its snapshot
         subscribers_.emplace(id, std::move(entry));
-        by_gateway_.emplace(std::move(gateway_id), id);
+        market_by_gateway_.emplace(std::move(gateway_id), id);
     }
     // Registered first, then asked: the snapshot can only reach the outbox
     // after this subscriber exists, so it can never be missed.
     for (SymbolId s : symbols)
         request_snapshot_(s, sub->id());
+    return {sub, SubscribeError::None};
+}
+
+MarketDataPublisher::SubscribeResult MarketDataPublisher::subscribe_replies(std::string gateway_id) {
+    if (gateway_id.empty())
+        return {nullptr, SubscribeError::EmptyGatewayId};
+    std::lock_guard lock(mutex_);
+    if (closed_)
+        return {nullptr, SubscribeError::Closed};
+    if (replies_by_gateway_.contains(gateway_id))
+        return {nullptr, SubscribeError::GatewayAlreadySubscribed};
+    const SubscriberId id = next_id_++;
+    auto sub = std::make_shared<Subscription>(id, gateway_id, options_.queue_capacity);
+    // No live map: route() never gives it a MarketEvent or a snapshot.
+    subscribers_.emplace(id, Subscriber{sub, SubscriberKind::Replies, {}});
+    replies_by_gateway_.emplace(std::move(gateway_id), id);
     return {sub, SubscribeError::None};
 }
 
@@ -121,7 +137,10 @@ void MarketDataPublisher::unsubscribe(SubscriberId id) {
 
 PublisherStats MarketDataPublisher::stats() const {
     std::lock_guard lock(mutex_);
-    return stats_;
+    PublisherStats s = stats_;
+    s.market_subscribers = market_by_gateway_.size();
+    s.replies_subscribers = replies_by_gateway_.size();
+    return s;
 }
 
 void MarketDataPublisher::drop(SubscriberId id, EndReason reason) {
@@ -129,7 +148,8 @@ void MarketDataPublisher::drop(SubscriberId id, EndReason reason) {
     if (it == subscribers_.end())
         return;
     it->second.sub->end(reason);
-    by_gateway_.erase(it->second.sub->gateway_id());
+    auto &by_gateway = it->second.kind == SubscriberKind::Replies ? replies_by_gateway_ : market_by_gateway_;
+    by_gateway.erase(it->second.sub->gateway_id());
     subscribers_.erase(it);
 }
 
@@ -142,7 +162,8 @@ void MarketDataPublisher::run() {
             for (auto &[id, entry] : subscribers_)
                 entry.sub->end(EndReason::Shutdown);
             subscribers_.clear();
-            by_gateway_.clear();
+            market_by_gateway_.clear();
+            replies_by_gateway_.clear();
             return;
         }
         if (options_.tap)
@@ -159,7 +180,7 @@ void MarketDataPublisher::route(Output &out) {
         for (auto &[id, entry] : subscribers_) {
             const auto symbol = entry.live.find(event->symbol);
             if (symbol == entry.live.end() || !symbol->second)
-                continue; // not subscribed, or still waiting for the snapshot
+                continue; // a Replies subscriber, not subscribed, or still waiting for the snapshot
             if (!entry.sub->try_push(*event))
                 too_slow.push_back(id);
         }
@@ -167,10 +188,10 @@ void MarketDataPublisher::route(Output &out) {
             ++stats_.slow_consumer_drops;
             drop(id, EndReason::SlowConsumer);
         }
-    } else if (auto *reply = std::get_if<Reply>(&out)) { // private
-        const auto it = by_gateway_.find(reply->gateway_id);
-        if (it == by_gateway_.end()) {
-            ++stats_.replies_dropped; // that gateway isn't connected
+    } else if (auto *reply = std::get_if<Reply>(&out)) { // private: Replies subscribers only
+        const auto it = replies_by_gateway_.find(reply->gateway_id);
+        if (it == replies_by_gateway_.end()) {
+            ++stats_.replies_dropped; // that gateway has no SubscribeReplies stream
             return;
         }
         const SubscriberId id = it->second;
