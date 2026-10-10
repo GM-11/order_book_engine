@@ -6,7 +6,10 @@
 #include <grpcpp/grpcpp.h>
 
 #include <mutex>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <variant>
 #include <vector>
 
 namespace server {
@@ -19,59 +22,99 @@ class FeedService final : public pb::EngineFeed::Service {
     FeedService(MarketDataPublisher &publisher, const FeedServerOptions &options)
         : publisher_(publisher), options_(options) {}
 
+    // Public stream: snapshots + market events. Never replies.
     grpc::Status Subscribe(grpc::ServerContext *context, const pb::FeedSubscribeRequest *request,
                            grpc::ServerWriter<pb::FeedMessage> *writer) override {
         std::vector<SymbolId> symbols(request->symbols().begin(), request->symbols().end());
         auto result = publisher_.subscribe(request->gateway_id(), std::move(symbols));
-        switch (result.error) {
-        case SubscribeError::None:
-            break;
+        if (result.error != SubscribeError::None)
+            return refusal(result.error, request->gateway_id(), "Subscribe");
+        return pump(
+            context, *result.subscription, writer, "market",
+            [](const FeedItem &item, pb::FeedMessage &out) {
+                if (std::holds_alternative<Reply>(item))
+                    return false; // cannot happen: market subscribers get no replies
+                fill_feed_message(item, out);
+                return true;
+            },
+            "fell behind; subscribe again for a fresh snapshot");
+    }
+
+    // Private stream: only this gateway's replies.
+    grpc::Status SubscribeReplies(grpc::ServerContext *context, const pb::RepliesSubscribeRequest *request,
+                                  grpc::ServerWriter<pb::Reply> *writer) override {
+        auto result = publisher_.subscribe_replies(request->gateway_id());
+        if (result.error != SubscribeError::None)
+            return refusal(result.error, request->gateway_id(), "SubscribeReplies");
+        return pump(
+            context, *result.subscription, writer, "replies",
+            [](const FeedItem &item, pb::Reply &out) {
+                const auto *reply = std::get_if<Reply>(&item);
+                if (!reply)
+                    return false; // cannot happen: replies subscribers get nothing else
+                fill_reply(*reply, out);
+                return true;
+            },
+            "fell behind; queued replies were lost, treat their outcomes as unknown");
+    }
+
+  private:
+    static grpc::Status refusal(SubscribeError error, const std::string &gateway_id, const char *rpc) {
+        switch (error) {
         case SubscribeError::EmptyGatewayId:
             return {grpc::StatusCode::INVALID_ARGUMENT, "gateway_id must not be empty"};
         case SubscribeError::GatewayAlreadySubscribed:
-            return {grpc::StatusCode::ALREADY_EXISTS, "gateway " + request->gateway_id() + " already has a stream"};
+            return {grpc::StatusCode::ALREADY_EXISTS, "gateway " + gateway_id + " already has a " + rpc + " stream"};
         case SubscribeError::UnknownSymbol:
             return {grpc::StatusCode::NOT_FOUND, "unknown symbol in request"};
         case SubscribeError::Closed:
             return {grpc::StatusCode::UNAVAILABLE, "engine is shutting down"};
+        case SubscribeError::None:
+            break;
         }
+        return {grpc::StatusCode::INTERNAL, "unexpected subscribe result"};
+    }
 
-        const std::shared_ptr<Subscription> sub = result.subscription;
+    template <class Message, class Fill>
+    grpc::Status pump(grpc::ServerContext *context, Subscription &sub, grpc::ServerWriter<Message> *writer,
+                      const std::string &stream, Fill fill, const char *slow_message) {
         // However this handler ends, the gateway id is freed.
         struct Leave {
             MarketDataPublisher &publisher;
             SubscriberId id;
             ~Leave() { publisher.unsubscribe(id); }
-        } leave{publisher_, sub->id()};
-        log("gateway " + sub->gateway_id() + " subscribed");
+        } leave{publisher_, sub.id()};
+        const std::string who = "gateway " + sub.gateway_id() + " (" + stream + ")";
+        log(who + " subscribed");
 
-        pb::FeedMessage message;
+        Message message;
         while (true) {
             if (context->IsCancelled()) {
-                log("gateway " + sub->gateway_id() + " went away");
+                log(who + " went away");
                 return {grpc::StatusCode::CANCELLED, "subscriber went away"};
             }
-            std::optional<FeedItem> item = sub->next_for(options_.poll);
+            std::optional<FeedItem> item = sub.next_for(options_.poll);
             if (!item) {
-                if (sub->ended())
+                if (sub.ended())
                     break; // ended and fully drained
                 continue;
             }
             message.Clear();
-            fill_feed_message(*item, message);
+            if (!fill(*item, message))
+                continue;
             // Blocks while the client's receive window is full. Only this
             // handler waits: the publisher thread never does, it just drops
             // this subscriber once its queue overflows.
             if (!writer->Write(message)) {
-                log("gateway " + sub->gateway_id() + " stream broke");
+                log(who + " stream broke");
                 return {grpc::StatusCode::CANCELLED, "stream broken"};
             }
         }
 
-        switch (sub->end_reason()) {
+        switch (sub.end_reason()) {
         case EndReason::SlowConsumer:
-            log("gateway " + sub->gateway_id() + " dropped: fell behind");
-            return {grpc::StatusCode::RESOURCE_EXHAUSTED, "fell behind; subscribe again for a fresh snapshot"};
+            log(who + " dropped: fell behind");
+            return {grpc::StatusCode::RESOURCE_EXHAUSTED, slow_message};
         case EndReason::Shutdown:
             return {grpc::StatusCode::UNAVAILABLE, "engine is shutting down"};
         case EndReason::Unsubscribed:
@@ -81,7 +124,6 @@ class FeedService final : public pb::EngineFeed::Service {
         return {grpc::StatusCode::CANCELLED, "unsubscribed"};
     }
 
-  private:
     void log(const std::string &message) const {
         if (options_.log)
             options_.log(message);
