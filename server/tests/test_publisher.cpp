@@ -19,7 +19,6 @@
 using namespace server;
 using namespace std::chrono_literals;
 using engine::EventKind;
-using engine::RejectReason;
 
 namespace {
 
@@ -116,7 +115,7 @@ TEST_CASE("subscribe asks for one snapshot per symbol; empty list means every sy
     REQUIRE(some.error == SubscribeError::None);
 
     const std::vector<std::pair<SymbolId, SubscriberId>> expected{
-        {1, all.subscription->id()},  {2, all.subscription->id()}, {3, all.subscription->id()},
+        {1, all.subscription->id()},  {2, all.subscription->id()},  {3, all.subscription->id()},
         {1, some.subscription->id()}, {3, some.subscription->id()},
     };
     CHECK(req.calls == expected);
@@ -129,11 +128,11 @@ TEST_CASE("events before the snapshot are skipped; events after it are delivered
     pub.start();
     auto sub = pub.subscribe("gw", {1}).subscription;
 
-    outbox.push(event(1, 1));                         // already in the snapshot
-    outbox.push(event(1, 2));                         // already in the snapshot
+    outbox.push(event(1, 1)); // already in the snapshot
+    outbox.push(event(1, 2)); // already in the snapshot
     outbox.push(snapshot_for(1, sub->id(), 2));
     outbox.push(event(1, 3));
-    outbox.push(event(2, 1));                         // a symbol it didn't ask for
+    outbox.push(event(2, 1)); // a symbol it didn't ask for
     outbox.push(event(1, 4));
     finish(outbox, pub);
 
@@ -185,25 +184,72 @@ TEST_CASE("stray snapshots are ignored", "[publisher]") {
     CHECK_FALSE(sub->next_for(10ms).has_value());
 }
 
-TEST_CASE("replies go only to their own gateway, even before its snapshot", "[publisher]") {
+TEST_CASE("subscribe_replies validates its input", "[publisher]") {
     BlockingQueue<Output> outbox;
     FakeRequester req;
     MarketDataPublisher pub(outbox, {1}, req.fn());
     pub.start();
-    auto a = pub.subscribe("gw-a", {}).subscription;
-    auto b = pub.subscribe("gw-b", {}).subscription;
+    CHECK(pub.subscribe_replies("").error == SubscribeError::EmptyGatewayId);
+    auto first = pub.subscribe_replies("gw");
+    REQUIRE(first.error == SubscribeError::None);
+    CHECK(pub.subscribe_replies("gw").error == SubscribeError::GatewayAlreadySubscribed);
+    // Separate namespace: the same id may also hold a market stream.
+    CHECK(pub.subscribe("gw", {1}).error == SubscribeError::None);
+    pub.unsubscribe(first.subscription->id());
+    CHECK(pub.subscribe_replies("gw").error == SubscribeError::None); // id freed
+    CHECK(req.calls.size() == 1);                                     // only the market subscribe asked for a snapshot
+    finish(outbox, pub);
+    CHECK(pub.subscribe_replies("late").error == SubscribeError::Closed);
+}
+
+TEST_CASE("replies go only to their own gateway's replies stream, never to market streams", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn());
+    pub.start();
+    auto a = pub.subscribe_replies("gw-a").subscription;
+    auto b = pub.subscribe_replies("gw-b").subscription;
+    auto market_a = pub.subscribe("gw-a", {1}).subscription; // same id, market kind
 
     outbox.push(reply_to("gw-a", 1));
     outbox.push(reply_to("gw-b", 2));
     outbox.push(reply_to("gw-gone", 3)); // nobody to tell
     outbox.push(reply_to("", 4));        // legacy path: no gateway
+    outbox.push(snapshot_for(1, market_a->id(), 0));
+    outbox.push(snapshot_for(1, a->id(), 0)); // stray: replies streams take no snapshots
+    outbox.push(event(1, 1));
     finish(outbox, pub);
 
     CHECK(std::get<Reply>(next(*a)).client_request_id == 1);
-    CHECK_FALSE(a->next_for(10ms).has_value());
+    CHECK_FALSE(a->next_for(10ms).has_value()); // no snapshot, no event
     CHECK(std::get<Reply>(next(*b)).client_request_id == 2);
     CHECK_FALSE(b->next_for(10ms).has_value());
+    CHECK(std::holds_alternative<SnapshotReady>(next(*market_a)));
+    CHECK(std::holds_alternative<MarketEvent>(next(*market_a)));
+    CHECK_FALSE(market_a->next_for(10ms).has_value()); // no reply
     CHECK(pub.stats().replies_dropped == 2);
+}
+
+// The reason the two streams exist: a market burst that drops a gateway's
+// market stream must not touch its replies.
+TEST_CASE("a market burst drops the market stream but never a reply", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn(), PublisherOptions{.queue_capacity = 3});
+    pub.start();
+    auto market = pub.subscribe("gw", {1}).subscription; // never read
+    auto replies = pub.subscribe_replies("gw").subscription;
+
+    outbox.push(snapshot_for(1, market->id(), 0));
+    for (engine::SequenceNumber seq = 1; seq <= 10; ++seq)
+        outbox.push(event(1, seq)); // overflows the market queue of 3
+    outbox.push(reply_to("gw", 42));
+    finish(outbox, pub);
+
+    CHECK(market->end_reason() == EndReason::SlowConsumer);
+    CHECK(std::get<Reply>(next(*replies)).client_request_id == 42);
+    CHECK(replies->end_reason() == EndReason::Shutdown); // not dropped
+    CHECK(pub.stats().slow_consumer_drops == 1);
 }
 
 TEST_CASE("a subscriber that falls behind is dropped; the others are not affected", "[publisher]") {
@@ -293,7 +339,8 @@ TEST_CASE("late joiners under load rebuild every book exactly", "[publisher][con
     });
     pub.start();
 
-    // A reader thread per subscriber: rebuilds books, counts replies.
+    // A reader thread per subscriber: rebuilds books (market streams) or
+    // counts replies (replies streams).
     struct Reader {
         std::shared_ptr<Subscription> sub;
         std::map<SymbolId, test_support::BookReplica> books;
@@ -333,9 +380,11 @@ TEST_CASE("late joiners under load rebuild every book exactly", "[publisher][con
         });
     };
 
-    // Gateways that send orders subscribe before any order, so they must get
-    // a reply to every request.
-    std::vector<std::unique_ptr<Reader>> readers;
+    // Gateways that send orders open both streams before any order: the
+    // market stream must rebuild every book, the replies stream must get a
+    // reply to every request.
+    std::vector<std::unique_ptr<Reader>> readers;  // market streams
+    std::vector<std::unique_ptr<Reader>> repliers; // replies streams, one per producer
     for (int p = 0; p < kProducers; ++p) {
         auto r = std::make_unique<Reader>();
         auto result = pub.subscribe("gw-" + std::to_string(p), {});
@@ -343,6 +392,13 @@ TEST_CASE("late joiners under load rebuild every book exactly", "[publisher][con
         r->sub = result.subscription;
         start_reader(*r);
         readers.push_back(std::move(r));
+
+        auto rr = std::make_unique<Reader>();
+        auto replies = pub.subscribe_replies("gw-" + std::to_string(p));
+        REQUIRE(replies.error == SubscribeError::None);
+        rr->sub = replies.subscription;
+        start_reader(*rr);
+        repliers.push_back(std::move(rr));
     }
 
     std::atomic<int> joined{0};
@@ -386,10 +442,8 @@ TEST_CASE("late joiners under load rebuild every book exactly", "[publisher][con
                         },
                         c);
                     const Seq seq = seq_of(c);
-                    owner.at(target)->submit(Stamped{.seq = seq,
-                                                     .ts = i,
-                                                     .command = std::move(c),
-                                                     .gateway_id = "gw-" + std::to_string(p)});
+                    owner.at(target)->submit(
+                        Stamped{.seq = seq, .ts = i, .command = std::move(c), .gateway_id = "gw-" + std::to_string(p)});
                 }
             });
         // Late joiners subscribe while orders are flowing.
@@ -424,6 +478,8 @@ TEST_CASE("late joiners under load rebuild every book exactly", "[publisher][con
     pub.join();
     for (auto &r : readers)
         r->thread.join();
+    for (auto &r : repliers)
+        r->thread.join();
 
     CHECK(joined == 4);
     // At least one late joiner really joined mid-stream: its snapshot was
@@ -450,10 +506,15 @@ TEST_CASE("late joiners under load rebuild every book exactly", "[publisher][con
             CHECK(got.last_trade_price == want.last_trade_price);
             CHECK(got.halted == want.halted);
         }
-        if (i < kProducers)
-            CHECK(r.replies == kOrdersPerProducer); // exactly one reply per request
-        else
-            CHECK(r.replies == 0); // late joiners sent nothing
+        CHECK(r.replies == 0); // market streams never carry replies
+    }
+    for (std::size_t p = 0; p < repliers.size(); ++p) {
+        const Reader &r = *repliers[p];
+        INFO("replies stream " << r.sub->gateway_id());
+        CHECK(r.error.empty());
+        CHECK(r.books.empty()); // no snapshots or events
+        CHECK(r.sub->end_reason() == EndReason::Shutdown);
+        CHECK(r.replies == kOrdersPerProducer); // exactly one reply per request
     }
     CHECK(pub.stats().slow_consumer_drops == 0);
 }

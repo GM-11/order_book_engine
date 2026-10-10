@@ -35,4 +35,6 @@ target_include_directories(server_tests PRIVATE
 
 include(Catch)
 
-catch_discover_tests(server_tests DISCOVERY_MODE PRE_TEST)
+# TSAN_OPTIONS is ignored by builds without -fsanitize=thread.
+catch_discover_tests(server_tests DISCOVERY_MODE PRE_TEST
+    PROPERTIES ENVIRONMENT "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp")

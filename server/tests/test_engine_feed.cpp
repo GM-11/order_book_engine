@@ -94,7 +94,34 @@ struct Stream {
     grpc::Status finish() { return reader->Finish(); }
 };
 
+// The order gateway's private stream: only its replies.
+struct ReplyStream {
+    grpc::ClientContext context;
+    std::unique_ptr<grpc::ClientReader<pb::Reply>> reader;
+
+    ReplyStream(pb::EngineFeed::Stub &stub, const std::string &gateway) {
+        pb::RepliesSubscribeRequest request;
+        request.set_gateway_id(gateway);
+        context.set_deadline(std::chrono::system_clock::now() + 20s);
+        reader = stub.SubscribeReplies(&context, request);
+    }
+    pb::Reply read() {
+        pb::Reply msg;
+        REQUIRE(reader->Read(&msg));
+        return msg;
+    }
+    grpc::Status finish() { return reader->Finish(); }
+};
+
 // Reads until the stream ends and returns its final status.
+// A replies stream sends nothing until a reply exists, so the client can't
+// tell when the server has registered it. Wait on the publisher's gauge.
+void wait_for_replies_subscribers(Rig &rig, std::size_t n) {
+    for (int i = 0; i < 500 && rig.publisher->stats().replies_subscribers != n; ++i)
+        std::this_thread::sleep_for(10ms);
+    REQUIRE(rig.publisher->stats().replies_subscribers == n);
+}
+
 grpc::Status drain_to_end(Stream &stream) {
     pb::FeedMessage msg;
     while (stream.reader->Read(&msg)) {
@@ -102,11 +129,20 @@ grpc::Status drain_to_end(Stream &stream) {
     return stream.finish();
 }
 
+grpc::Status drain_to_end(ReplyStream &stream) {
+    pb::Reply msg;
+    while (stream.reader->Read(&msg)) {
+    }
+    return stream.finish();
+}
+
 } // namespace
 
-TEST_CASE("A gateway gets a snapshot, then events, then its reply", "[engine_feed]") {
+TEST_CASE("A gateway gets a snapshot, then events; its reply comes on the replies stream", "[engine_feed]") {
     Rig rig;
     rig.order(1, "other", 100, 9, engine::Side::Sell, 101, 10); // before the subscribe
+    ReplyStream replies(*rig.stub, "gw");
+    wait_for_replies_subscribers(rig, 1); // else our reply could be dropped
     Stream stream(*rig.stub, "gw", {1});
 
     const pb::FeedMessage first = stream.read();
@@ -118,7 +154,7 @@ TEST_CASE("A gateway gets a snapshot, then events, then its reply", "[engine_fee
     CHECK(snap.asks(0).quantity() == 10);
 
     rig.order(7, "gw", 200, 4, engine::Side::Buy, 101, 3);
-    // Accepted, Trade, then our reply (the buy filled completely).
+    // Market stream: Accepted, then Trade (the buy filled completely).
     const auto accepted = stream.read();
     REQUIRE(accepted.has_event());
     CHECK(accepted.event().kind() == pb::EVENT_KIND_ACCEPTED);
@@ -133,14 +169,37 @@ TEST_CASE("A gateway gets a snapshot, then events, then its reply", "[engine_fee
     CHECK(trade.event().price() == 101);
     CHECK(trade.event().quantity() == 3);
 
-    const auto reply = stream.read();
-    REQUIRE(reply.has_reply());
-    CHECK(reply.reply().gateway_id() == "gw");
-    CHECK(reply.reply().client_request_id() == 7);
-    CHECK(reply.reply().reject_reason() == pb::REJECT_REASON_NONE);
+    // Replies stream: only our reply; "other"'s reply went nowhere.
+    const pb::Reply reply = replies.read();
+    CHECK(reply.gateway_id() == "gw");
+    CHECK(reply.client_request_id() == 7);
+    CHECK(reply.order_id() == 200);
+    CHECK(reply.reject_reason() == pb::REJECT_REASON_NONE);
 
     rig.close();
-    CHECK(drain_to_end(stream).error_code() == grpc::StatusCode::UNAVAILABLE);
+    CHECK(drain_to_end(stream).error_code() == grpc::StatusCode::UNAVAILABLE); // no reply was in it
+    CHECK(drain_to_end(replies).error_code() == grpc::StatusCode::UNAVAILABLE);
+}
+
+TEST_CASE("Bad SubscribeReplies requests get clear status codes", "[engine_feed]") {
+    Rig rig;
+    {
+        ReplyStream s(*rig.stub, "");
+        CHECK(drain_to_end(s).error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+    }
+    ReplyStream held(*rig.stub, "gw");
+    wait_for_replies_subscribers(rig, 1);
+    {
+        ReplyStream second(*rig.stub, "gw");
+        CHECK(drain_to_end(second).error_code() == grpc::StatusCode::ALREADY_EXISTS);
+    }
+    {
+        Stream market(*rig.stub, "gw", {1}); // separate namespace: allowed
+        CHECK(market.read().has_snapshot());
+    }
+    held.context.TryCancel();
+    drain_to_end(held);
+    wait_for_replies_subscribers(rig, 0); // id freed when the client leaves
 }
 
 TEST_CASE("Only the asked-for symbols are streamed", "[engine_feed]") {

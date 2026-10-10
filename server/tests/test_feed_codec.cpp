@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <set>
+#include <stdexcept>
 
 using namespace server;
 namespace pb = exchange::v1;
@@ -16,6 +17,12 @@ namespace {
 pb::FeedMessage decode(const FeedItem &item) {
     pb::FeedMessage msg;
     REQUIRE(msg.ParseFromString(encode_feed_item(item)));
+    return msg;
+}
+
+pb::Reply decode_reply(const Reply &reply) {
+    pb::Reply msg;
+    REQUIRE(msg.ParseFromString(encode_reply(reply)));
     return msg;
 }
 } // namespace
@@ -114,12 +121,18 @@ TEST_CASE("Every reject reason maps to its own wire value, never UNSPECIFIED", "
     for (const auto &[reason, wire] : all) {
         Reply r{};
         r.reject_reason = reason;
-        const auto got = decode(r).reply().reject_reason();
+        const auto got = decode_reply(r).reject_reason();
         CHECK(got == wire);
         seen.insert(got);
     }
     CHECK(seen.size() == all.size());
     CHECK(pb::RejectReason_ARRAYSIZE == static_cast<int>(all.size()) + 1);
+}
+
+TEST_CASE("A reply never goes on the market stream", "[feed_codec]") {
+    Reply r{};
+    r.gateway_id = "gw";
+    CHECK_THROWS_AS(encode_feed_item(FeedItem{r}), std::logic_error);
 }
 
 TEST_CASE("A reply keeps its gateway, request and outcome", "[feed_codec]") {
@@ -130,7 +143,7 @@ TEST_CASE("A reply keeps its gateway, request and outcome", "[feed_codec]") {
     r.reject_reason = RejectReason::PriceBand;
     r.unaccepted_quantity = 4;
     r.rested_price = 110;
-    const auto m = decode(r).reply();
+    const auto m = decode_reply(r);
     CHECK(m.gateway_id() == "gw-a");
     CHECK(m.client_request_id() == 88);
     CHECK(m.symbol() == 2);
@@ -140,7 +153,7 @@ TEST_CASE("A reply keeps its gateway, request and outcome", "[feed_codec]") {
     CHECK(m.rested_price() == 110);
 
     r.rested_price = std::nullopt;
-    CHECK_FALSE(decode(r).reply().has_rested_price());
+    CHECK_FALSE(decode_reply(r).has_rested_price());
 }
 
 TEST_CASE("A snapshot keeps every order in order, stops, last trade and halt", "[feed_codec]") {
