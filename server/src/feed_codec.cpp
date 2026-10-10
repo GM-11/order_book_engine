@@ -154,11 +154,19 @@ void fill_feed_message(const FeedItem &item, pb::FeedMessage &out) {
             else if constexpr (std::is_same_v<T, MarketEvent>)
                 fill(x, *out.mutable_event());
             else if constexpr (std::is_same_v<T, Reply>)
-                fill(x, *out.mutable_reply());
+                throw std::logic_error("a Reply never goes on the market stream; use fill_reply");
             else
                 static_assert(always_false<T>, "unhandled FeedItem type");
         },
         item);
+}
+
+void fill_reply(const Reply &in, pb::Reply &out) { fill(in, out); }
+
+std::string encode_reply(const Reply &reply) {
+    pb::Reply msg;
+    fill_reply(reply, msg);
+    return msg.SerializeAsString();
 }
 
 std::string encode_feed_item(const FeedItem &item) {
