@@ -28,7 +28,8 @@ class Worker {
     void run(); // the thread's loop
     engine::Book &book_for(SymbolId symbol);
     void publish(SymbolId symbol, engine::Book &book); // drain events -> outbox
-    void reply(const Stamped &item, RequestId request_id, SymbolId symbol, engine::RejectReason reason,
+    void reply(const Stamped &item, RequestId client_request_id, SymbolId symbol, engine::OrderId order_id,
+               engine::RejectReason reason,
                engine::Quantity unaccepted = 0, std::optional<engine::Price> rested_price = std::nullopt);
 
     BlockingQueue<Stamped> inbox_;

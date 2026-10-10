@@ -14,6 +14,6 @@ struct DecodeResult {
 
 std::string encode_body(const Command &command);
 
-DecodeResult decode_body(SymbolId symbol, RequestId request_id, std::string_view payload);
+DecodeResult decode_body(SymbolId symbol, RequestId client_request_id, std::string_view payload);
 
 } // namespace server

@@ -29,6 +29,7 @@ class Router {
     std::vector<std::unique_ptr<Worker>> workers_;
     std::unordered_map<SymbolId, Worker *> routes_;
     Clock clock_;
+    std::atomic<Seq> next_seq_ = 1; // local submissions: stands in for the sequencer
     bool started_ = false;
     std::atomic<bool> running_ = false;
 };
