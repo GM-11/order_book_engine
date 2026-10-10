@@ -198,7 +198,7 @@ int main() {
                 continue;
             }
             RequestId req = next_request++;
-            submit(CancelOrder{.request_id = req,
+            submit(CancelOrder{.client_request_id = req,
                                .symbol = *sym,
                                .requester = trader,
                                .order_id = static_cast<engine::OrderId>(a)},
@@ -211,7 +211,7 @@ int main() {
                 continue;
             }
             RequestId req = next_request++;
-            submit(ModifyOrder{.request_id = req,
+            submit(ModifyOrder{.client_request_id = req,
                                .symbol = *sym,
                                .requester = trader,
                                .order_id = static_cast<engine::OrderId>(a),
@@ -243,7 +243,7 @@ int main() {
                 continue;
             }
             RequestId req = next_request++;
-            submit(CancelStop{.request_id = req,
+            submit(CancelStop{.client_request_id = req,
                               .symbol = *sym,
                               .requester = trader,
                               .order_id = static_cast<engine::OrderId>(a)},

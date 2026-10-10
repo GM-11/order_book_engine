@@ -125,14 +125,14 @@ TEST_CASE("Every reject reason maps to its own wire value, never UNSPECIFIED", "
 TEST_CASE("A reply keeps its gateway, request and outcome", "[feed_codec]") {
     Reply r{};
     r.gateway_id = "gw-a";
-    r.request_id = 88;
+    r.client_request_id = 88;
     r.symbol = 2;
     r.reject_reason = RejectReason::PriceBand;
     r.unaccepted_quantity = 4;
     r.rested_price = 110;
     const auto m = decode(r).reply();
     CHECK(m.gateway_id() == "gw-a");
-    CHECK(m.request_id() == 88);
+    CHECK(m.client_request_id() == 88);
     CHECK(m.symbol() == 2);
     CHECK(m.reject_reason() == pb::REJECT_REASON_PRICE_BAND);
     CHECK(m.unaccepted_quantity() == 4);

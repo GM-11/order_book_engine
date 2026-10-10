@@ -60,43 +60,47 @@ void Worker::run() {
 
                 if constexpr (std::is_same_v<T, NewOrder>) {
                     engine::Book &book = book_for(arg.symbol);
-                    engine::OrderResult result = book.add_order(arg.order, now);
+                    engine::Order order = arg.order;
+                    order.id = item.seq; // the engine assigns ids; any id in the payload is ignored
+                    engine::OrderResult result = book.add_order(order, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.request_id, arg.symbol, result.reject_reason, result.unaccepted_quantity,
-                          result.rested_price);
+                    reply(item, arg.client_request_id, arg.symbol, order.id, result.reject_reason,
+                          result.unaccepted_quantity, result.rested_price);
 
                 } else if constexpr (std::is_same_v<T, CancelOrder>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.cancel_order(arg.order_id, arg.requester, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.request_id, arg.symbol, result);
+                    reply(item, arg.client_request_id, arg.symbol, arg.order_id, result);
 
                 } else if constexpr (std::is_same_v<T, ModifyOrder>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::OrderResult result =
                         book.modify_order(arg.order_id, arg.requester, arg.new_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.request_id, arg.symbol, result.reject_reason, result.unaccepted_quantity,
-                          result.rested_price);
+                    reply(item, arg.client_request_id, arg.symbol, arg.order_id, result.reject_reason,
+                          result.unaccepted_quantity, result.rested_price);
 
                 } else if constexpr (std::is_same_v<T, PlaceStop>) {
                     engine::Book &book = book_for(arg.symbol);
-                    engine::RejectReason result = book.place_stop_order(arg.stop, now);
+                    engine::StopOrder stop = arg.stop;
+                    stop.id = item.seq; // see NewOrder
+                    engine::RejectReason result = book.place_stop_order(stop, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.request_id, arg.symbol, result);
+                    reply(item, arg.client_request_id, arg.symbol, stop.id, result);
 
                 } else if constexpr (std::is_same_v<T, CancelStop>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.cancel_stop_order(arg.order_id, arg.requester, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.request_id, arg.symbol, result);
+                    reply(item, arg.client_request_id, arg.symbol, arg.order_id, result);
 
                 } else if constexpr (std::is_same_v<T, ModifyStop>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.modify_stop_order(
                         arg.order_id, arg.requester, arg.new_stop_price, arg.new_limit_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.request_id, arg.symbol, result);
+                    reply(item, arg.client_request_id, arg.symbol, arg.order_id, result);
 
                 } else if constexpr (std::is_same_v<T, Shutdown> || std::is_same_v<T, TakeSnapshot>) {
                     // Handled before std::visit; nothing to do here.
@@ -109,14 +113,17 @@ void Worker::run() {
     }
 }
 
-void Worker::reply(const Stamped &item, RequestId request_id, SymbolId symbol, engine::RejectReason reason,
+void Worker::reply(const Stamped &item, RequestId client_request_id, SymbolId symbol, engine::OrderId order_id,
+                   engine::RejectReason reason,
                    engine::Quantity unaccepted, std::optional<engine::Price> rested_price) {
-    outbox_.push(Reply{.request_id = request_id,
+    outbox_.push(Reply{.client_request_id = client_request_id,
                        .symbol = symbol,
                        .reject_reason = reason,
                        .unaccepted_quantity = unaccepted,
                        .rested_price = rested_price,
-                       .gateway_id = item.gateway_id});
+                       .gateway_id = item.gateway_id,
+                       .account_id = item.account_id,
+                       .order_id = order_id});
 }
 
 void Worker::publish(SymbolId symbol, engine::Book &book) {

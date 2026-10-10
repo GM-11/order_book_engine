@@ -153,7 +153,7 @@ void MarketDataPublisher::run() {
 }
 
 void MarketDataPublisher::route(Output &out) {
-    if (auto *event = std::get_if<MarketEvent>(&out)) {
+    if (auto *event = std::get_if<MarketEvent>(&out)) { // public
         ++stats_.events_routed;
         std::vector<SubscriberId> too_slow;
         for (auto &[id, entry] : subscribers_) {
@@ -167,7 +167,7 @@ void MarketDataPublisher::route(Output &out) {
             ++stats_.slow_consumer_drops;
             drop(id, EndReason::SlowConsumer);
         }
-    } else if (auto *reply = std::get_if<Reply>(&out)) {
+    } else if (auto *reply = std::get_if<Reply>(&out)) { // private
         const auto it = by_gateway_.find(reply->gateway_id);
         if (it == by_gateway_.end()) {
             ++stats_.replies_dropped; // that gateway isn't connected
@@ -178,7 +178,7 @@ void MarketDataPublisher::route(Output &out) {
             ++stats_.slow_consumer_drops;
             drop(id, EndReason::SlowConsumer);
         }
-    } else if (auto *ready = std::get_if<SnapshotReady>(&out)) {
+    } else if (auto *ready = std::get_if<SnapshotReady>(&out)) { // snapshot
         const auto it = subscribers_.find(ready->subscriber);
         if (it == subscribers_.end())
             return; // it left before its snapshot was ready

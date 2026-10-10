@@ -29,13 +29,13 @@ TEST_CASE("commands survive a trip through the queue with their alternative inta
     o.quantity = 10;
 
     q.push(NewOrder{1, 42, o});
-    q.push(CancelOrder{.request_id = 2, .symbol = 42, .requester = 1, .order_id = 7});
+    q.push(CancelOrder{.client_request_id = 2, .symbol = 42, .requester = 1, .order_id = 7});
     q.push(Shutdown{});
 
     Command a = q.pop();
     REQUIRE(std::holds_alternative<NewOrder>(a));
     const auto &n = std::get<NewOrder>(a);
-    REQUIRE(n.request_id == 1);
+    REQUIRE(n.client_request_id == 1);
     REQUIRE(n.symbol == 42);
     REQUIRE(n.order.id == 7);
     REQUIRE(n.order.price == 100);

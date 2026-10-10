@@ -128,7 +128,7 @@ std::string encode_body(const Command &command) {
     return body.SerializeAsString();
 }
 
-DecodeResult decode_body(SymbolId symbol, RequestId request_id, std::string_view payload) {
+DecodeResult decode_body(SymbolId symbol, RequestId client_request_id, std::string_view payload) {
     if (payload.size() > static_cast<std::size_t>(INT_MAX))
         return error("payload exceeds maximum protobuf size");
 
@@ -146,7 +146,7 @@ DecodeResult decode_body(SymbolId symbol, RequestId request_id, std::string_view
         if (!type)
             return error("invalid order type");
         return {.command = Command{NewOrder{
-                    .request_id = request_id,
+                    .client_request_id = client_request_id,
                     .symbol = symbol,
                     .order = engine::Order{.id = p.id(),
                                            .owner_id = p.owner_id(),
@@ -159,12 +159,12 @@ DecodeResult decode_body(SymbolId symbol, RequestId request_id, std::string_view
     case pb::CommandBody::kCancelOrder: {
         const auto &p = body.cancel_order();
         return {.command = Command{CancelOrder{
-                    .request_id = request_id, .symbol = symbol, .requester = p.requester(), .order_id = p.order_id()}},
+                    .client_request_id = client_request_id, .symbol = symbol, .requester = p.requester(), .order_id = p.order_id()}},
                 .error = {}};
     }
     case pb::CommandBody::kModifyOrder: {
         const auto &p = body.modify_order();
-        return {.command = Command{ModifyOrder{.request_id = request_id,
+        return {.command = Command{ModifyOrder{.client_request_id = client_request_id,
                                                .symbol = symbol,
                                                .requester = p.requester(),
                                                .order_id = p.order_id(),
@@ -178,7 +178,7 @@ DecodeResult decode_body(SymbolId symbol, RequestId request_id, std::string_view
         if (!side)
             return error("invalid stop side");
         return {.command = Command{PlaceStop{
-                    .request_id = request_id,
+                    .client_request_id = client_request_id,
                     .symbol = symbol,
                     .stop = engine::StopOrder{.id = p.id(),
                                               .owner_id = p.owner_id(),
@@ -192,13 +192,13 @@ DecodeResult decode_body(SymbolId symbol, RequestId request_id, std::string_view
     case pb::CommandBody::kCancelStop: {
         const auto &p = body.cancel_stop();
         return {.command = Command{CancelStop{
-                    .request_id = request_id, .symbol = symbol, .requester = p.requester(), .order_id = p.order_id()}},
+                    .client_request_id = client_request_id, .symbol = symbol, .requester = p.requester(), .order_id = p.order_id()}},
                 .error = {}};
     }
     case pb::CommandBody::kModifyStop: {
         const auto &p = body.modify_stop();
         return {.command = Command{ModifyStop{
-                    .request_id = request_id,
+                    .client_request_id = client_request_id,
                     .symbol = symbol,
                     .requester = p.requester(),
                     .order_id = p.order_id(),

@@ -77,7 +77,7 @@ SubmitResult Router::submit(Command command) {
     auto it = routes_.find(symbol);
     if (it == routes_.end())
         return SubmitResult::UnknownSymbol;
-    it->second->submit(Stamped{.seq = 0, .ts = clock_(), .command = std::move(command)});
+    it->second->submit(Stamped{.seq = next_seq_++, .ts = clock_(), .command = std::move(command)});
 
     return SubmitResult::Queued;
 }

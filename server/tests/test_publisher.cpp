@@ -1,5 +1,6 @@
 // Tests for MarketDataPublisher: who gets what, in what order, and what
 // happens to subscribers that join late or fall behind. Run under TSan too.
+#include "seq_of.hpp"
 #include "server/publisher.hpp"
 #include "server/worker.hpp"
 
@@ -49,7 +50,7 @@ SnapshotReady snapshot_for(SymbolId symbol, SubscriberId id, engine::SequenceNum
 
 Reply reply_to(std::string gateway, RequestId request) {
     Reply r{};
-    r.request_id = request;
+    r.client_request_id = request;
     r.gateway_id = std::move(gateway);
     return r;
 }
@@ -198,9 +199,9 @@ TEST_CASE("replies go only to their own gateway, even before its snapshot", "[pu
     outbox.push(reply_to("", 4));        // legacy path: no gateway
     finish(outbox, pub);
 
-    CHECK(std::get<Reply>(next(*a)).request_id == 1);
+    CHECK(std::get<Reply>(next(*a)).client_request_id == 1);
     CHECK_FALSE(a->next_for(10ms).has_value());
-    CHECK(std::get<Reply>(next(*b)).request_id == 2);
+    CHECK(std::get<Reply>(next(*b)).client_request_id == 2);
     CHECK_FALSE(b->next_for(10ms).has_value());
     CHECK(pub.stats().replies_dropped == 2);
 }
@@ -384,7 +385,8 @@ TEST_CASE("late joiners under load rebuild every book exactly", "[publisher][con
                                 return 0;
                         },
                         c);
-                    owner.at(target)->submit(Stamped{.seq = 0,
+                    const Seq seq = seq_of(c);
+                    owner.at(target)->submit(Stamped{.seq = seq,
                                                      .ts = i,
                                                      .command = std::move(c),
                                                      .gateway_id = "gw-" + std::to_string(p)});

@@ -8,7 +8,7 @@
 // behaviour is pinned by its own contract tests.
 //
 // What reaches the Worker is observed through the Worker's outbox: every
-// command produces exactly one Reply (with its request_id) plus engine events
+// command produces exactly one Reply (with its client_request_id) plus engine events
 // (whose ts is the time the Book was given).
 
 #include "server/codec.hpp"
@@ -173,13 +173,13 @@ engine::Order buy(engine::OrderId id, engine::Price price = 100) {
     return o;
 }
 
-// A sequenced NewOrder whose request_id and order id both equal `request`.
+// A sequenced NewOrder whose client_request_id and order id both equal `request`.
 pb::SequencedCommand order(std::uint64_t seq, std::int64_t ts, std::uint64_t request, SymbolId symbol = MOOG) {
     pb::SequencedCommand c;
     c.set_seq(seq);
     c.set_ts(ts);
     c.set_symbol(symbol);
-    c.set_request_id(request);
+    c.set_client_request_id(request);
     c.set_gateway_id("gw-1");
     c.set_payload(encode_body(NewOrder{request, symbol, buy(request)}));
     return c;
@@ -278,9 +278,9 @@ TEST_CASE("feed: commands reach the worker in order, with the sequencer's ts", "
 
     const auto seen = wait_for_replies(rig.outbox, 3);
     REQUIRE(seen.replies.size() == 3);
-    CHECK(seen.replies[0].request_id == 11);
-    CHECK(seen.replies[1].request_id == 12);
-    CHECK(seen.replies[2].request_id == 13);
+    CHECK(seen.replies[0].client_request_id == 11);
+    CHECK(seen.replies[1].client_request_id == 12);
+    CHECK(seen.replies[2].client_request_id == 13);
 
     std::vector<engine::Timestamp> accepted_ts;
     for (const auto &m : seen.events)
@@ -354,7 +354,7 @@ TEST_CASE("feed: a gap stops the feed for good and nothing after it reaches "
 
     const auto seen = wait_for_replies(rig.outbox, 2, 300ms);
     REQUIRE(seen.replies.size() == 1); // seq 1 only; seq 3 was never handed over
-    CHECK(seen.replies[0].request_id == 1);
+    CHECK(seen.replies[0].client_request_id == 1);
 
     std::this_thread::sleep_for(200ms);            // 10 retry delays
     CHECK(rig.server.fake.requests().size() == 1); // a gap is never retried
@@ -414,8 +414,8 @@ TEST_CASE("feed: a junk payload is skipped but still counts as dealt with", "[fe
 
     const auto seen = wait_for_replies(rig.outbox, 2);
     REQUIRE(seen.replies.size() == 2);
-    CHECK(seen.replies[0].request_id == 1);
-    CHECK(seen.replies[1].request_id == 3); // seq 3 was accepted: no false "gap"
+    CHECK(seen.replies[0].client_request_id == 1);
+    CHECK(seen.replies[1].client_request_id == 3); // seq 3 was accepted: no false "gap"
 
     CHECK(eventually([&] { return feed.last_seq() == 3; }));
     CHECK_FALSE(feed.failed());
@@ -433,7 +433,7 @@ TEST_CASE("feed: after a disconnect it reconnects from the next seq", "[feed]") 
 
     const auto seen = wait_for_replies(rig.outbox, 3);
     REQUIRE(seen.replies.size() == 3);
-    CHECK(seen.replies[2].request_id == 3);
+    CHECK(seen.replies[2].client_request_id == 3);
     CHECK(eventually([&] { return feed.last_seq() == 3; }));
     CHECK_FALSE(feed.failed());
 

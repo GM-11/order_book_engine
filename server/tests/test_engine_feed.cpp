@@ -70,7 +70,7 @@ struct Rig {
         o.type = engine::OrderType::Limit;
         o.price = price;
         o.quantity = qty;
-        worker.submit(Stamped{.seq = 0, .ts = 1, .command = NewOrder{request, symbol, o}, .gateway_id = gateway});
+        worker.submit(Stamped{.seq = id, .ts = 1, .command = NewOrder{request, symbol, o}, .gateway_id = gateway});
     }
 };
 
@@ -136,7 +136,7 @@ TEST_CASE("A gateway gets a snapshot, then events, then its reply", "[engine_fee
     const auto reply = stream.read();
     REQUIRE(reply.has_reply());
     CHECK(reply.reply().gateway_id() == "gw");
-    CHECK(reply.reply().request_id() == 7);
+    CHECK(reply.reply().client_request_id() == 7);
     CHECK(reply.reply().reject_reason() == pb::REJECT_REASON_NONE);
 
     rig.close();

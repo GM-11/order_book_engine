@@ -101,7 +101,7 @@ std::string format_event(std::string_view ticker, const engine::EngineEvent &e) 
 
 std::string format_reply(const server::Reply &reply) {
     std::ostringstream s;
-    s << "  reply to request " << reply.request_id << ": ";
+    s << "  reply to request " << reply.client_request_id << " (order " << reply.order_id << "): ";
     if (reply.reject_reason == engine::RejectReason::None)
         s << "OK";
     else

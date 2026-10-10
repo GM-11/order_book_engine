@@ -6,6 +6,7 @@
 // outbox. After the join, no other thread touches the outbox, so the reads
 // are race-free. Run under -fsanitize=thread to check the concurrent parts.
 
+#include "seq_of.hpp"
 #include "server/worker.hpp"
 #include "server/codec.hpp"
 #include "server/router.hpp"
@@ -38,7 +39,8 @@ engine::Order limit(engine::OrderId id, engine::OwnerId owner, engine::Side side
 }
 
 void submit(Worker &worker, Command command, engine::Timestamp ts = 0) {
-    worker.submit(Stamped{.seq = 0, .ts = ts, .command = std::move(command)});
+    const Seq seq = seq_of(command);
+    worker.submit(Stamped{.seq = seq, .ts = ts, .command = std::move(command)});
 }
 
 std::vector<Output> drain(BlockingQueue<Output> &q) {
@@ -121,7 +123,7 @@ TEST_CASE("one resting limit order: Accepted, Rested, then a clean Reply", "[wor
     // Events for a command come before its Reply.
     REQUIRE(std::holds_alternative<Reply>(all.back()));
     auto r = std::get<Reply>(all.back());
-    REQUIRE(r.request_id == 77);
+    REQUIRE(r.client_request_id == 77);
     REQUIRE(r.symbol == 42);
     REQUIRE(r.reject_reason == RejectReason::None);
     REQUIRE(r.unaccepted_quantity == 0);
@@ -139,7 +141,7 @@ TEST_CASE("each command kind reaches the right Book call", "[worker]") {
         // 3: modify the resting sell to total 8 (4 filled, so 4 left).
         submit(w,
                ModifyOrder{
-                   .request_id = 3, .symbol = 1, .requester = 1, .order_id = 1, .new_price = 100, .new_quantity = 8});
+                   .client_request_id = 3, .symbol = 1, .requester = 1, .order_id = 1, .new_price = 100, .new_quantity = 8});
         // 4: sell stop at 90 (last trade 100, so it stays dormant).
         engine::StopOrder s{};
         s.id = 5;
@@ -149,24 +151,24 @@ TEST_CASE("each command kind reaches the right Book call", "[worker]") {
         s.quantity = 1;
         submit(w, PlaceStop{4, 1, s});
         // 5: move the stop to 80. 6: cancel it. 7: cancel it again (too late).
-        submit(w, ModifyStop{.request_id = 5,
+        submit(w, ModifyStop{.client_request_id = 5,
                              .symbol = 1,
                              .requester = 3,
                              .order_id = 5,
                              .new_stop_price = 80,
                              .new_limit_price = std::nullopt,
                              .new_quantity = 1});
-        submit(w, CancelStop{.request_id = 6, .symbol = 1, .requester = 3, .order_id = 5});
-        submit(w, CancelStop{.request_id = 7, .symbol = 1, .requester = 3, .order_id = 5});
+        submit(w, CancelStop{.client_request_id = 6, .symbol = 1, .requester = 3, .order_id = 5});
+        submit(w, CancelStop{.client_request_id = 7, .symbol = 1, .requester = 3, .order_id = 5});
         // 8: cancel the resting sell. 9: cancel an id that never existed.
-        submit(w, CancelOrder{.request_id = 8, .symbol = 1, .requester = 1, .order_id = 1});
-        submit(w, CancelOrder{.request_id = 9, .symbol = 1, .requester = 1, .order_id = 999});
+        submit(w, CancelOrder{.client_request_id = 8, .symbol = 1, .requester = 1, .order_id = 1});
+        submit(w, CancelOrder{.client_request_id = 9, .symbol = 1, .requester = 1, .order_id = 999});
     }
     auto all = drain(out);
     auto replies = replies_of(all);
     REQUIRE(replies.size() == 9);
     for (std::size_t i = 0; i < replies.size(); ++i)
-        REQUIRE(replies[i].request_id == i + 1); // replies in submit order
+        REQUIRE(replies[i].client_request_id == i + 1); // replies in submit order
 
     REQUIRE(replies[0].reject_reason == RejectReason::None);
     REQUIRE(replies[1].reject_reason == RejectReason::None);
@@ -299,7 +301,7 @@ TEST_CASE("two workers, four symbols, four producer threads: every command "
     // Every request answered exactly once.
     std::set<RequestId> seen;
     for (auto &r : replies_of(all))
-        REQUIRE(seen.insert(r.request_id).second);
+        REQUIRE(seen.insert(r.client_request_id).second);
     REQUIRE(seen.size() == static_cast<std::size_t>(kProducers * kPerProducer));
 
     // Per symbol: sequence numbers are 1, 2, 3, ... in outbox order.
@@ -354,9 +356,9 @@ TEST_CASE("A reply carries the gateway id of the command that caused it", "[work
     }
     const auto replies = replies_of(drain(outbox));
     REQUIRE(replies.size() == 2);
-    CHECK(replies[0].request_id == 7);
+    CHECK(replies[0].client_request_id == 7);
     CHECK(replies[0].gateway_id == "gw-a");
-    CHECK(replies[1].request_id == 8);
+    CHECK(replies[1].client_request_id == 8);
     CHECK(replies[1].gateway_id == "gw-b");
 }
 
@@ -414,4 +416,71 @@ TEST_CASE("TakeSnapshot is internal: the router and the codec refuse it", "[work
     router.start();
     CHECK_THROWS_AS(router.submit(TakeSnapshot{1, 1}), std::invalid_argument);
     CHECK_THROWS_AS(encode_body(TakeSnapshot{1, 1}), std::invalid_argument);
+}
+
+namespace {
+// Runs one journal through a fresh worker and returns every reply, in order.
+std::vector<Reply> run_journal(const std::vector<Stamped> &journal) {
+    BlockingQueue<Output> outbox;
+    {
+        Worker worker(outbox);
+        worker.add_book(1, std::make_unique<engine::Book>());
+        worker.start();
+        for (const Stamped &item : journal)
+            worker.submit(item);
+    }
+    return replies_of(drain(outbox));
+}
+} // namespace
+
+TEST_CASE("The engine ignores the id in the payload and uses the command seq", "[worker]") {
+    const auto replies = run_journal(
+        {Stamped{.seq = 41,
+                 .ts = 1,
+                 .command = NewOrder{7, 1, limit(999, 1, engine::Side::Buy, 100, 5)},
+                 .gateway_id = "gw",
+                 .account_id = 5},
+         Stamped{.seq = 42,
+                 .ts = 2,
+                 .command = PlaceStop{8, 1, engine::StopOrder{.id = 999, .owner_id = 1, .side = engine::Side::Sell,
+                                                              .stop_price = 90, .quantity = 3}},
+                 .gateway_id = "gw",
+                 .account_id = 5},
+         Stamped{.seq = 43,
+                 .ts = 3,
+                 .command = CancelOrder{9, 1, 1, 41},
+                 .gateway_id = "gw",
+                 .account_id = 5}});
+    REQUIRE(replies.size() == 3);
+    CHECK(replies[0].order_id == 41);
+    CHECK(replies[1].order_id == 42);
+    CHECK(replies[2].order_id == 41); // cancel: the target
+    for (const Reply &r : replies) {
+        CHECK(r.account_id == 5);
+        CHECK(r.gateway_id == "gw");
+    }
+    CHECK(replies[0].client_request_id == 7);
+    CHECK(replies[2].client_request_id == 9);
+}
+
+TEST_CASE("Replaying the same journal twice gives identical order ids", "[worker]") {
+    std::vector<Stamped> journal;
+    for (Seq s = 1; s <= 20; ++s)
+        journal.push_back(Stamped{.seq = s,
+                                  .ts = static_cast<engine::Timestamp>(s),
+                                  .command = NewOrder{s + 1000, 1, limit(0, 1 + s % 3, s % 2 ? engine::Side::Buy : engine::Side::Sell,
+                                                                         100, 2)},
+                                  .gateway_id = "gw",
+                                  .account_id = 1 + s % 3});
+
+    const auto first = run_journal(journal);
+    const auto second = run_journal(journal);
+    REQUIRE(first.size() == journal.size());
+    REQUIRE(second.size() == first.size());
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        CHECK(first[i].order_id == journal[i].seq);
+        CHECK(first[i].order_id == second[i].order_id);
+        CHECK(first[i].client_request_id == second[i].client_request_id);
+        CHECK(first[i].account_id == second[i].account_id);
+    }
 }
