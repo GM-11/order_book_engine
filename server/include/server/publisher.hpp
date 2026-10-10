@@ -29,6 +29,11 @@ enum class EndReason {
     Shutdown,
 };
 
+enum class SubscriberKind {
+    Market,
+    Replies,
+};
+
 enum class SubscribeError {
     None,
     EmptyGatewayId,
@@ -67,8 +72,10 @@ struct PublisherOptions {
 
 struct PublisherStats {
     std::uint64_t events_routed = 0;   // MarketEvents taken from the outbox
-    std::uint64_t replies_dropped = 0; // no subscriber for their gateway
+    std::uint64_t replies_dropped = 0; // no Replies subscriber for their gateway
     std::uint64_t slow_consumer_drops = 0;
+    std::size_t market_subscribers = 0;  // open right now
+    std::size_t replies_subscribers = 0; // open right now
 };
 
 class MarketDataPublisher {
@@ -89,6 +96,7 @@ class MarketDataPublisher {
         SubscribeError error = SubscribeError::None;
     };
     SubscribeResult subscribe(std::string gateway_id, std::vector<SymbolId> symbols);
+    SubscribeResult subscribe_replies(std::string gateway_id);
     void unsubscribe(SubscriberId id);
 
     PublisherStats stats() const;
@@ -96,7 +104,9 @@ class MarketDataPublisher {
   private:
     struct Subscriber {
         std::shared_ptr<Subscription> sub;
-        std::unordered_map<SymbolId, bool> live; // Per symbol: false = waiting for its snapshot, true = live.
+        SubscriberKind kind = SubscriberKind::Market;
+        std::unordered_map<SymbolId, bool>
+            live; // Market only. Per symbol: false = waiting for its snapshot, true = live.
     };
 
     void run();
@@ -111,7 +121,8 @@ class MarketDataPublisher {
 
     mutable std::mutex mutex_; // guards everything below
     std::unordered_map<SubscriberId, Subscriber> subscribers_;
-    std::unordered_map<std::string, SubscriberId> by_gateway_;
+    std::unordered_map<std::string, SubscriberId> market_by_gateway_;
+    std::unordered_map<std::string, SubscriberId> replies_by_gateway_;
     SubscriberId next_id_ = 1;
     bool closed_ = false;
     PublisherStats stats_;
