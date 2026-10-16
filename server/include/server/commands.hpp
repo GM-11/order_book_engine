@@ -10,23 +10,23 @@
 #include <variant>
 namespace server {
 using SymbolId = std::uint32_t;
-using RequestId = std::uint64_t;
+using ClientOrderId = std::string;
 
 struct NewOrder {
-    RequestId client_request_id;
+    ClientOrderId client_order_id;
     SymbolId symbol;
     engine::Order order;
 };
 
 struct CancelOrder {
-    RequestId client_request_id;
+    ClientOrderId client_order_id;
     SymbolId symbol;
     engine::OwnerId requester;
     engine::OrderId order_id;
 };
 
 struct ModifyOrder {
-    RequestId client_request_id;
+    ClientOrderId client_order_id;
     SymbolId symbol;
     engine::OwnerId requester; // see CancelOrder
     engine::OrderId order_id;
@@ -35,20 +35,20 @@ struct ModifyOrder {
 };
 
 struct PlaceStop {
-    RequestId client_request_id;
+    ClientOrderId client_order_id;
     SymbolId symbol;
     engine::StopOrder stop;
 };
 
 struct CancelStop {
-    RequestId client_request_id;
+    ClientOrderId client_order_id;
     SymbolId symbol;
     engine::OwnerId requester; // see CancelOrder
     engine::OrderId order_id;
 };
 
 struct ModifyStop {
-    RequestId client_request_id;
+    ClientOrderId client_order_id;
     SymbolId symbol;
     engine::OwnerId requester; // see CancelOrder
     engine::OrderId order_id;
@@ -83,12 +83,12 @@ struct MarketEvent {
 };
 
 struct Reply {
-    RequestId client_request_id;
+    ClientOrderId client_order_id;
     SymbolId symbol;
     engine::RejectReason reject_reason;
     engine::Quantity unaccepted_quantity = 0;
     std::optional<engine::Price> rested_price = std::nullopt;
-    std::string gateway_id{}; // copied from the Stamped command
+    std::string gateway_id{};     // copied from the Stamped command
     std::uint64_t account_id = 0; // copied from the Stamped command
     engine::OrderId order_id = 0; // new order/stop: the id it was given. cancel/modify: the target
 };

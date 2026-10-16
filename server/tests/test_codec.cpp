@@ -1,7 +1,7 @@
 // Codec tests: Command <-> payload bytes.
 //
 // Rules under test:
-//   * The payload carries the command body only. symbol and client_request_id come
+//   * The payload carries the command body only. symbol and client_order_id come
 //     from the envelope, i.e. the arguments of decode_body.
 //   * The codec checks the SHAPE of the bytes (parses, body set, enums known),
 //     never the MEANING of the numbers. The engine owns that.
@@ -25,12 +25,12 @@ namespace {
 
 // Envelope values used when decoding.
 constexpr SymbolId kSymbol = 7;
-constexpr RequestId kRequest = 99;
+const ClientOrderId kRequest = "99";
 // Envelope values stored in the commands we encode. They differ from the
 // decode ones on purpose: a decoder that took them from anywhere but its
 // arguments would be caught.
 constexpr SymbolId kInSymbol = 2;
-constexpr RequestId kInRequest = 1;
+const ClientOrderId kInRequest = "1";
 
 // Encode, decode, and check the bytes survive a second encode unchanged
 // (nothing was dropped on the way). Returns the decoded command.
@@ -101,13 +101,13 @@ TEST_CASE("a new order survives the round trip, both sides, both types", "[codec
 
 TEST_CASE("cancel and modify survive the round trip", "[codec]") {
     SECTION("cancel order") {
-        const Command out = round_trip(CancelOrder{.client_request_id = kInRequest, .symbol = kInSymbol, .requester = 3, .order_id = 4});
+        const Command out = round_trip(CancelOrder{.client_order_id = kInRequest, .symbol = kInSymbol, .requester = 3, .order_id = 4});
         const auto &c = as<CancelOrder>(out);
         CHECK(c.requester == 3);
         CHECK(c.order_id == 4);
     }
     SECTION("modify order") {
-        const Command out = round_trip(ModifyOrder{.client_request_id = kInRequest,
+        const Command out = round_trip(ModifyOrder{.client_order_id = kInRequest,
                                                    .symbol = kInSymbol,
                                                    .requester = 3,
                                                    .order_id = 4,
@@ -137,13 +137,13 @@ TEST_CASE("stop commands survive the round trip", "[codec]") {
         CHECK(as<PlaceStop>(out).stop.limit_price == std::optional<engine::Price>{110});
     }
     SECTION("cancel a stop") {
-        const Command out = round_trip(CancelStop{.client_request_id = kInRequest, .symbol = kInSymbol, .requester = 3, .order_id = 6});
+        const Command out = round_trip(CancelStop{.client_order_id = kInRequest, .symbol = kInSymbol, .requester = 3, .order_id = 6});
         const auto &c = as<CancelStop>(out);
         CHECK(c.requester == 3);
         CHECK(c.order_id == 6);
     }
     SECTION("modify a stop, limit price absent") {
-        const Command out = round_trip(ModifyStop{.client_request_id = kInRequest,
+        const Command out = round_trip(ModifyStop{.client_order_id = kInRequest,
                                                   .symbol = kInSymbol,
                                                   .requester = 3,
                                                   .order_id = 6,
@@ -158,7 +158,7 @@ TEST_CASE("stop commands survive the round trip", "[codec]") {
         CHECK(m.new_quantity == 9);
     }
     SECTION("modify a stop, limit price present") {
-        const Command out = round_trip(ModifyStop{.client_request_id = kInRequest,
+        const Command out = round_trip(ModifyStop{.client_order_id = kInRequest,
                                                   .symbol = kInSymbol,
                                                   .requester = 3,
                                                   .order_id = 6,
@@ -184,7 +184,7 @@ TEST_CASE("a price of zero stays present; an absent price stays absent", "[codec
         CHECK(*p.stop.limit_price == 0);
     }
     SECTION("modify-stop limit price") {
-        const Command out = round_trip(ModifyStop{.client_request_id = kInRequest,
+        const Command out = round_trip(ModifyStop{.client_order_id = kInRequest,
                                                   .symbol = kInSymbol,
                                                   .requester = 3,
                                                   .order_id = 6,
@@ -199,16 +199,28 @@ TEST_CASE("a price of zero stays present; an absent price stays absent", "[codec
 
 // ------------------------------------------------------------------- envelope
 
-TEST_CASE("symbol and client_request_id come from the envelope, not the payload", "[codec]") {
+TEST_CASE("a UUID-length client_order_id survives decode unchanged", "[codec]") {
+    // 36 chars: longer than libstdc++'s 15-char short-string buffer, so this goes through the heap path.
+    const ClientOrderId uuid = "123e4567-e89b-12d3-a456-426614174000";
+    REQUIRE(uuid.size() == 36);
+    const std::string bytes =
+        encode_body(CancelOrder{.client_order_id = kInRequest, .symbol = kInSymbol, .requester = 3, .order_id = 4});
+    DecodeResult out = decode_body(kSymbol, uuid, bytes);
+    INFO(out.error);
+    REQUIRE(out.command.has_value());
+    CHECK(as<CancelOrder>(*out.command).client_order_id == uuid);
+}
+
+TEST_CASE("symbol and client_order_id come from the envelope, not the payload", "[codec]") {
     SECTION("decode uses its arguments") {
-        const Command out = round_trip(CancelOrder{.client_request_id = kInRequest, .symbol = kInSymbol, .requester = 3, .order_id = 4});
+        const Command out = round_trip(CancelOrder{.client_order_id = kInRequest, .symbol = kInSymbol, .requester = 3, .order_id = 4});
         const auto &c = as<CancelOrder>(out);
         CHECK(c.symbol == kSymbol);
-        CHECK(c.client_request_id == kRequest);
+        CHECK(c.client_order_id == kRequest);
     }
     SECTION("encode ignores them: same body, same bytes") {
-        const CancelOrder a{.client_request_id = 1, .symbol = 2, .requester = 3, .order_id = 4};
-        const CancelOrder b{.client_request_id = 100, .symbol = 200, .requester = 3, .order_id = 4};
+        const CancelOrder a{.client_order_id = "1", .symbol = 2, .requester = 3, .order_id = 4};
+        const CancelOrder b{.client_order_id = "100", .symbol = 200, .requester = 3, .order_id = 4};
         CHECK(encode_body(a) == encode_body(b));
     }
 }

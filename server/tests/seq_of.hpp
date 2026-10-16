@@ -1,6 +1,5 @@
 #pragma once
 #include "server/commands.hpp"
-#include <cstdint>
 #include <variant>
 
 // The engine takes an order's id from the command's seq. Tests that want a

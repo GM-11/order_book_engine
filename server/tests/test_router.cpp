@@ -7,6 +7,7 @@
 // concurrent parts.
 
 #include "server/router.hpp"
+#include "client_ids.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -63,8 +64,8 @@ std::vector<Reply> replies_of(const std::vector<Output> &out) {
     return r;
 }
 
-NewOrder buy(RequestId req, SymbolId sym, engine::OrderId id) {
-    return NewOrder{req, sym, limit(id, 1, engine::Side::Buy, 100, 10)};
+NewOrder buy(std::uint64_t req, SymbolId sym, engine::OrderId id) {
+    return NewOrder{cid(req), sym, limit(id, 1, engine::Side::Buy, 100, 10)};
 }
 
 } // namespace
@@ -172,13 +173,13 @@ TEST_CASE("each symbol's commands reach its own Book", "[router]") {
     r.shutdown();
 
     auto all = drain(r.outbox());
-    std::map<RequestId, Reply> by_req;
+    std::map<ClientOrderId, Reply> by_req;
     for (auto &rep : replies_of(all))
-        by_req.emplace(rep.client_request_id, rep);
+        by_req.emplace(rep.client_order_id, rep);
     REQUIRE(by_req.size() == 3);
-    REQUIRE(by_req.at(10).symbol == 1);
-    REQUIRE(by_req.at(20).symbol == 2);
-    REQUIRE(by_req.at(30).symbol == 3);
+    REQUIRE(by_req.at("10").symbol == 1);
+    REQUIRE(by_req.at("20").symbol == 2);
+    REQUIRE(by_req.at("30").symbol == 3);
     for (auto &[req, rep] : by_req)
         REQUIRE(rep.reject_reason == RejectReason::None);
 
@@ -195,8 +196,8 @@ TEST_CASE("orders on one symbol trade against each other through the router", "[
     Router r(2, fixed_clock(0));
     r.add_symbol(1, 1, std::make_unique<engine::Book>());
     r.start();
-    r.submit(NewOrder{1, 1, limit(1, 1, engine::Side::Sell, 100, 10)});
-    r.submit(NewOrder{2, 1, limit(2, 2, engine::Side::Buy, 100, 4)});
+    r.submit(NewOrder{"1", 1, limit(1, 1, engine::Side::Sell, 100, 10)});
+    r.submit(NewOrder{"2", 1, limit(2, 2, engine::Side::Buy, 100, 4)});
     r.shutdown();
 
     int trades = 0;
@@ -268,7 +269,7 @@ TEST_CASE("three workers, six symbols, four producer threads through the "
                 engine::OrderId id = next_order_id.fetch_add(1);
                 auto side = (i % 2) ? engine::Side::Sell : engine::Side::Buy;
                 engine::Price px = (i % 2) ? 99 + (i % 3) : 100 + (i % 3);
-                RequestId req = static_cast<RequestId>(p) * kPerProducer + i + 1;
+                ClientOrderId req = cid(static_cast<std::uint64_t>(p) * kPerProducer + i + 1);
                 auto res = r.submit(
                     NewOrder{req, sym, limit(id, static_cast<engine::OwnerId>(p * 10 + i % 7), side, px, 1 + i % 5)});
                 if (res == SubmitResult::Queued)
@@ -289,9 +290,9 @@ TEST_CASE("three workers, six symbols, four producer threads through the "
     REQUIRE(queued + unknown == kProducers * kPerProducer);
 
     auto all = drain(r.outbox());
-    std::set<RequestId> seen;
+    std::set<ClientOrderId> seen;
     for (auto &rep : replies_of(all)) {
-        REQUIRE(seen.insert(rep.client_request_id).second); // answered once
+        REQUIRE(seen.insert(rep.client_order_id).second); // answered once
         REQUIRE(rep.symbol != 7);                    // unknown never queued
     }
     REQUIRE(seen.size() == static_cast<std::size_t>(queued.load()));
@@ -320,17 +321,17 @@ TEST_CASE("through the router, one trader cannot cancel another trader's "
     Router r(1, fixed_clock(0));
     r.add_symbol(1, 0, std::make_unique<engine::Book>());
     r.start();
-    r.submit(NewOrder{1, 1, limit(1, /*owner*/ 1, engine::Side::Sell, 100, 10)});
-    r.submit(CancelOrder{.client_request_id = 2, .symbol = 1, .requester = 2, .order_id = 1});
-    r.submit(CancelOrder{.client_request_id = 3, .symbol = 1, .requester = 1, .order_id = 1});
+    r.submit(NewOrder{"1", 1, limit(1, /*owner*/ 1, engine::Side::Sell, 100, 10)});
+    r.submit(CancelOrder{.client_order_id = "2", .symbol = 1, .requester = 2, .order_id = 1});
+    r.submit(CancelOrder{.client_order_id = "3", .symbol = 1, .requester = 1, .order_id = 1});
     r.shutdown();
 
     auto all = drain(r.outbox());
-    std::map<RequestId, RejectReason> reason;
+    std::map<ClientOrderId, RejectReason> reason;
     for (auto &rep : replies_of(all))
-        reason[rep.client_request_id] = rep.reject_reason;
-    REQUIRE(reason.at(2) == RejectReason::UnknownOrder); // trader 2: refused
-    REQUIRE(reason.at(3) == RejectReason::None);         // trader 1: cancelled
+        reason[rep.client_order_id] = rep.reject_reason;
+    REQUIRE(reason.at("2") == RejectReason::UnknownOrder); // trader 2: refused
+    REQUIRE(reason.at("3") == RejectReason::None);         // trader 1: cancelled
 
     int cancelled = 0;
     for (auto &m : events_of(all))

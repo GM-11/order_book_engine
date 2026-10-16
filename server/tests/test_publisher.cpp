@@ -1,6 +1,7 @@
 // Tests for MarketDataPublisher: who gets what, in what order, and what
 // happens to subscribers that join late or fall behind. Run under TSan too.
 #include "seq_of.hpp"
+#include "client_ids.hpp"
 #include "server/publisher.hpp"
 #include "server/worker.hpp"
 
@@ -47,9 +48,9 @@ SnapshotReady snapshot_for(SymbolId symbol, SubscriberId id, engine::SequenceNum
     return {symbol, id, snap};
 }
 
-Reply reply_to(std::string gateway, RequestId request) {
+Reply reply_to(std::string gateway, ClientOrderId request) {
     Reply r{};
-    r.client_request_id = request;
+    r.client_order_id = request;
     r.gateway_id = std::move(gateway);
     return r;
 }
@@ -211,18 +212,18 @@ TEST_CASE("replies go only to their own gateway's replies stream, never to marke
     auto b = pub.subscribe_replies("gw-b").subscription;
     auto market_a = pub.subscribe("gw-a", {1}).subscription; // same id, market kind
 
-    outbox.push(reply_to("gw-a", 1));
-    outbox.push(reply_to("gw-b", 2));
-    outbox.push(reply_to("gw-gone", 3)); // nobody to tell
-    outbox.push(reply_to("", 4));        // legacy path: no gateway
+    outbox.push(reply_to("gw-a", "1"));
+    outbox.push(reply_to("gw-b", "2"));
+    outbox.push(reply_to("gw-gone", "3")); // nobody to tell
+    outbox.push(reply_to("", "4"));        // legacy path: no gateway
     outbox.push(snapshot_for(1, market_a->id(), 0));
     outbox.push(snapshot_for(1, a->id(), 0)); // stray: replies streams take no snapshots
     outbox.push(event(1, 1));
     finish(outbox, pub);
 
-    CHECK(std::get<Reply>(next(*a)).client_request_id == 1);
+    CHECK(std::get<Reply>(next(*a)).client_order_id == "1");
     CHECK_FALSE(a->next_for(10ms).has_value()); // no snapshot, no event
-    CHECK(std::get<Reply>(next(*b)).client_request_id == 2);
+    CHECK(std::get<Reply>(next(*b)).client_order_id == "2");
     CHECK_FALSE(b->next_for(10ms).has_value());
     CHECK(std::holds_alternative<SnapshotReady>(next(*market_a)));
     CHECK(std::holds_alternative<MarketEvent>(next(*market_a)));
@@ -243,11 +244,11 @@ TEST_CASE("a market burst drops the market stream but never a reply", "[publishe
     outbox.push(snapshot_for(1, market->id(), 0));
     for (engine::SequenceNumber seq = 1; seq <= 10; ++seq)
         outbox.push(event(1, seq)); // overflows the market queue of 3
-    outbox.push(reply_to("gw", 42));
+    outbox.push(reply_to("gw", "42"));
     finish(outbox, pub);
 
     CHECK(market->end_reason() == EndReason::SlowConsumer);
-    CHECK(std::get<Reply>(next(*replies)).client_request_id == 42);
+    CHECK(std::get<Reply>(next(*replies)).client_order_id == "42");
     CHECK(replies->end_reason() == EndReason::Shutdown); // not dropped
     CHECK(pub.stats().slow_consumer_drops == 1);
 }
@@ -305,7 +306,7 @@ TEST_CASE("the tap sees every outbox item, routed or not", "[publisher]") {
     MarketDataPublisher pub(outbox, {1}, req.fn(), PublisherOptions{.tap = [&](const Output &) { ++seen; }});
     pub.start();
     outbox.push(event(1, 1));
-    outbox.push(reply_to("nobody", 1));
+    outbox.push(reply_to("nobody", "1"));
     finish(outbox, pub);
     CHECK(seen == 2);
 }
@@ -424,14 +425,14 @@ TEST_CASE("late joiners under load rebuild every book exactly", "[publisher][con
                         if (o.type == engine::OrderType::Limit)
                             o.price = pick(95, 105);
                         o.quantity = pick(1, 10);
-                        c = NewOrder{static_cast<RequestId>(i), s, o};
+                        c = NewOrder{cid(i), s, o};
                         if (o.type == engine::OrderType::Limit)
                             mine.emplace_back(s, id);
                     } else {
                         const auto [sym, oid] = mine[pick(0, static_cast<int>(mine.size()) - 1)];
                         // Ownership is checked by the engine; the requester may be wrong
                         // (owner chosen at random), which only produces UnknownOrder.
-                        c = CancelOrder{static_cast<RequestId>(i), sym, who, oid};
+                        c = CancelOrder{cid(i), sym, who, oid};
                     }
                     const SymbolId target = std::visit(
                         [](auto &&a) -> SymbolId {

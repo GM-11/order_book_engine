@@ -101,7 +101,7 @@ void fill(const MarketEvent &in, pb::MarketEvent &out) {
 
 void fill(const Reply &in, pb::Reply &out) {
     out.set_gateway_id(in.gateway_id);
-    out.set_client_request_id(in.client_request_id);
+    out.set_client_order_id(in.client_order_id);
     out.set_account_id(in.account_id);
     out.set_order_id(in.order_id);
     out.set_symbol(in.symbol);

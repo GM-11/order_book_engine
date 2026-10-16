@@ -1,6 +1,7 @@
 // EngineFeedServer over real gRPC on localhost: a test client subscribes the
 // way a gateway would.
 #include "server/engine_feed_server.hpp"
+#include "client_ids.hpp"
 #include "server/publisher.hpp"
 #include "server/worker.hpp"
 
@@ -61,7 +62,7 @@ struct Rig {
     }
     ~Rig() { close(); }
 
-    void order(RequestId request, const std::string &gateway, engine::OrderId id, engine::OwnerId owner,
+    void order(std::uint64_t request, const std::string &gateway, engine::OrderId id, engine::OwnerId owner,
                engine::Side side, engine::Price price, engine::Quantity qty, SymbolId symbol = 1) {
         engine::Order o{};
         o.id = id;
@@ -70,7 +71,7 @@ struct Rig {
         o.type = engine::OrderType::Limit;
         o.price = price;
         o.quantity = qty;
-        worker.submit(Stamped{.seq = id, .ts = 1, .command = NewOrder{request, symbol, o}, .gateway_id = gateway});
+        worker.submit(Stamped{.seq = id, .ts = 1, .command = NewOrder{cid(request), symbol, o}, .gateway_id = gateway});
     }
 };
 
@@ -172,7 +173,7 @@ TEST_CASE("A gateway gets a snapshot, then events; its reply comes on the replie
     // Replies stream: only our reply; "other"'s reply went nowhere.
     const pb::Reply reply = replies.read();
     CHECK(reply.gateway_id() == "gw");
-    CHECK(reply.client_request_id() == 7);
+    CHECK(reply.client_order_id() == "7");
     CHECK(reply.order_id() == 200);
     CHECK(reply.reject_reason() == pb::REJECT_REASON_NONE);
 

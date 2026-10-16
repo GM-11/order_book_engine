@@ -129,11 +129,11 @@ struct SequencerFeed::Impl {
                     break;
                 }
 
-                DecodeResult decoded = decode_body(command.symbol(), command.client_request_id(), command.payload());
+                DecodeResult decoded = decode_body(command.symbol(), command.client_order_id(), command.payload());
                 if (!decoded) {
                     options.log("partition " + std::to_string(options.partition) + ": skipping seq " +
                                 std::to_string(command.seq()) + " from gateway " + command.gateway_id() + " request " +
-                                std::to_string(command.client_request_id()) + ": " + decoded.error);
+                                command.client_order_id() + ": " + decoded.error);
                     // A seen, deliberately skipped command still counts during replay.
                     last = command.seq();
                     already_exists_retries = 0;

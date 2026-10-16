@@ -64,21 +64,21 @@ void Worker::run() {
                     order.id = item.seq; // the engine assigns ids; any id in the payload is ignored
                     engine::OrderResult result = book.add_order(order, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.client_request_id, arg.symbol, order.id, result.reject_reason,
+                    reply(item, arg.client_order_id, arg.symbol, order.id, result.reject_reason,
                           result.unaccepted_quantity, result.rested_price);
 
                 } else if constexpr (std::is_same_v<T, CancelOrder>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.cancel_order(arg.order_id, arg.requester, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.client_request_id, arg.symbol, arg.order_id, result);
+                    reply(item, arg.client_order_id, arg.symbol, arg.order_id, result);
 
                 } else if constexpr (std::is_same_v<T, ModifyOrder>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::OrderResult result =
                         book.modify_order(arg.order_id, arg.requester, arg.new_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.client_request_id, arg.symbol, arg.order_id, result.reject_reason,
+                    reply(item, arg.client_order_id, arg.symbol, arg.order_id, result.reject_reason,
                           result.unaccepted_quantity, result.rested_price);
 
                 } else if constexpr (std::is_same_v<T, PlaceStop>) {
@@ -87,20 +87,20 @@ void Worker::run() {
                     stop.id = item.seq; // see NewOrder
                     engine::RejectReason result = book.place_stop_order(stop, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.client_request_id, arg.symbol, stop.id, result);
+                    reply(item, arg.client_order_id, arg.symbol, stop.id, result);
 
                 } else if constexpr (std::is_same_v<T, CancelStop>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.cancel_stop_order(arg.order_id, arg.requester, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.client_request_id, arg.symbol, arg.order_id, result);
+                    reply(item, arg.client_order_id, arg.symbol, arg.order_id, result);
 
                 } else if constexpr (std::is_same_v<T, ModifyStop>) {
                     engine::Book &book = book_for(arg.symbol);
                     engine::RejectReason result = book.modify_stop_order(
                         arg.order_id, arg.requester, arg.new_stop_price, arg.new_limit_price, arg.new_quantity, now);
                     publish(arg.symbol, book);
-                    reply(item, arg.client_request_id, arg.symbol, arg.order_id, result);
+                    reply(item, arg.client_order_id, arg.symbol, arg.order_id, result);
 
                 } else if constexpr (std::is_same_v<T, Shutdown> || std::is_same_v<T, TakeSnapshot>) {
                     // Handled before std::visit; nothing to do here.
@@ -113,10 +113,10 @@ void Worker::run() {
     }
 }
 
-void Worker::reply(const Stamped &item, RequestId client_request_id, SymbolId symbol, engine::OrderId order_id,
-                   engine::RejectReason reason,
-                   engine::Quantity unaccepted, std::optional<engine::Price> rested_price) {
-    outbox_.push(Reply{.client_request_id = client_request_id,
+void Worker::reply(const Stamped &item, ClientOrderId client_order_id, SymbolId symbol, engine::OrderId order_id,
+                   engine::RejectReason reason, engine::Quantity unaccepted,
+                   std::optional<engine::Price> rested_price) {
+    outbox_.push(Reply{.client_order_id = std::move(client_order_id),
                        .symbol = symbol,
                        .reject_reason = reason,
                        .unaccepted_quantity = unaccepted,

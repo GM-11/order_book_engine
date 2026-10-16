@@ -138,14 +138,14 @@ TEST_CASE("A reply never goes on the market stream", "[feed_codec]") {
 TEST_CASE("A reply keeps its gateway, request and outcome", "[feed_codec]") {
     Reply r{};
     r.gateway_id = "gw-a";
-    r.client_request_id = 88;
+    r.client_order_id = "88";
     r.symbol = 2;
     r.reject_reason = RejectReason::PriceBand;
     r.unaccepted_quantity = 4;
     r.rested_price = 110;
     const auto m = decode_reply(r);
     CHECK(m.gateway_id() == "gw-a");
-    CHECK(m.client_request_id() == 88);
+    CHECK(m.client_order_id() == "88");
     CHECK(m.symbol() == 2);
     CHECK(m.reject_reason() == pb::REJECT_REASON_PRICE_BAND);
     CHECK(m.unaccepted_quantity() == 4);

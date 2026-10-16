@@ -115,7 +115,7 @@ int main() {
 
     // --- 3. gateway: keyboard -> Command -> router.submit -------------------
     // The gateway assigns every id. Clients never pick engine ids.
-    RequestId next_request = 1;
+    std::uint64_t next_request = 1;
     engine::OrderId next_order = 1;
     engine::OwnerId trader = 1;
 
@@ -123,10 +123,10 @@ int main() {
         std::to_string(instruments.partitions) + " workers (instruments v" + std::to_string(instruments.version) +
         " from " + instruments_path + "). Type 'help'.");
 
-    auto submit = [&](Command cmd, RequestId req) {
+    auto submit = [&](Command cmd, ClientOrderId req) {
         switch (router.submit(std::move(cmd))) {
         case SubmitResult::Queued:
-            say("request " + std::to_string(req) + " queued");
+            say("request " + req + " queued");
             break;
         case SubmitResult::UnknownSymbol:
             say("unknown symbol");
@@ -189,7 +189,7 @@ int main() {
                 o.type = engine::OrderType::Market; // no price: rejected if one is set
             }
             say("order id " + std::to_string(o.id));
-            RequestId req = next_request++;
+            ClientOrderId req = std::to_string(next_request++);
             submit(NewOrder{req, *sym, o}, req);
         } else if (verb == "cancel" && w.size() == 3 && parse_int(w[2], a)) {
             auto sym = symbol_of(w[1]);
@@ -197,8 +197,8 @@ int main() {
                 say("unknown ticker " + w[1]);
                 continue;
             }
-            RequestId req = next_request++;
-            submit(CancelOrder{.client_request_id = req,
+            ClientOrderId req = std::to_string(next_request++);
+            submit(CancelOrder{.client_order_id = req,
                                .symbol = *sym,
                                .requester = trader,
                                .order_id = static_cast<engine::OrderId>(a)},
@@ -210,8 +210,8 @@ int main() {
                 say("unknown ticker " + w[1]);
                 continue;
             }
-            RequestId req = next_request++;
-            submit(ModifyOrder{.client_request_id = req,
+            ClientOrderId req = std::to_string(next_request++);
+            submit(ModifyOrder{.client_order_id = req,
                                .symbol = *sym,
                                .requester = trader,
                                .order_id = static_cast<engine::OrderId>(a),
@@ -234,7 +234,7 @@ int main() {
             if (w.size() == 6)
                 s.limit_price = c;
             say("stop order id " + std::to_string(s.id));
-            RequestId req = next_request++;
+            ClientOrderId req = std::to_string(next_request++);
             submit(PlaceStop{req, *sym, s}, req);
         } else if (verb == "cancelstop" && w.size() == 3 && parse_int(w[2], a)) {
             auto sym = symbol_of(w[1]);
@@ -242,8 +242,8 @@ int main() {
                 say("unknown ticker " + w[1]);
                 continue;
             }
-            RequestId req = next_request++;
-            submit(CancelStop{.client_request_id = req,
+            ClientOrderId req = std::to_string(next_request++);
+            submit(CancelStop{.client_order_id = req,
                               .symbol = *sym,
                               .requester = trader,
                               .order_id = static_cast<engine::OrderId>(a)},
