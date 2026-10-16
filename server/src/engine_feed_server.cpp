@@ -46,6 +46,8 @@ class FeedService final : public pb::EngineFeed::Service {
         auto result = publisher_.subscribe_replies(request->gateway_id());
         if (result.error != SubscribeError::None)
             return refusal(result.error, request->gateway_id(), "SubscribeReplies");
+
+        writer->SendInitialMetadata();
         return pump(
             context, *result.subscription, writer, "replies",
             [](const FeedItem &item, pb::Reply &out) {
