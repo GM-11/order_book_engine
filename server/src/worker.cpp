@@ -63,7 +63,7 @@ void Worker::run() {
                     engine::Order order = arg.order;
                     order.id = item.seq; // the engine assigns ids; any id in the payload is ignored
                     engine::OrderResult result = book.add_order(order, now);
-                    publish(arg.symbol, book);
+                    publish(arg.symbol, book, order.id, arg.client_order_id);
                     reply(item, arg.client_order_id, arg.symbol, order.id, result.reject_reason,
                           result.unaccepted_quantity, result.rested_price);
 
@@ -86,7 +86,7 @@ void Worker::run() {
                     engine::StopOrder stop = arg.stop;
                     stop.id = item.seq; // see NewOrder
                     engine::RejectReason result = book.place_stop_order(stop, now);
-                    publish(arg.symbol, book);
+                    publish(arg.symbol, book, stop.id, arg.client_order_id);
                     reply(item, arg.client_order_id, arg.symbol, stop.id, result);
 
                 } else if constexpr (std::is_same_v<T, CancelStop>) {
@@ -126,9 +126,16 @@ void Worker::reply(const Stamped &item, ClientOrderId client_order_id, SymbolId 
                        .order_id = order_id});
 }
 
-void Worker::publish(SymbolId symbol, engine::Book &book) {
+void Worker::publish(SymbolId symbol, engine::Book &book, engine::OrderId own_id,
+                     const ClientOrderId &client_order_id) {
+    using K = engine::EventKind;
     for (engine::EngineEvent &event : book.drain_events()) {
-        outbox_.push(MarketEvent{symbol, event});
+        const bool carries_id = event.kind == K::Accepted || event.kind == K::StopAccepted ||
+                                event.kind == K::Rejected || event.kind == K::Expired;
+        if (carries_id && !client_order_id.empty() && event.order_id == own_id)
+            outbox_.push(MarketEvent{symbol, event, client_order_id});
+        else
+            outbox_.push(MarketEvent{symbol, event});
     }
 }
 

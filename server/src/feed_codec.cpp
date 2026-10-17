@@ -46,6 +46,10 @@ pb::EventKind to_pb(engine::EventKind kind) {
         return pb::EVENT_KIND_HALTED;
     case K::Resumed:
         return pb::EVENT_KIND_RESUMED;
+    case K::Rejected:
+        return pb::EVENT_KIND_REJECTED;
+    case K::Expired:
+        return pb::EVENT_KIND_EXPIRED;
     }
     throw std::invalid_argument("unknown EventKind");
 }
@@ -97,6 +101,10 @@ void fill(const MarketEvent &in, pb::MarketEvent &out) {
     out.set_quantity(e.quantity);
     if (e.limit_price)
         out.set_limit_price(*e.limit_price);
+    if (!in.client_order_id.empty())
+        out.set_client_order_id(in.client_order_id);
+    if (e.kind == engine::EventKind::Rejected)
+        out.set_reject_reason(to_pb(e.reject_reason));
 }
 
 void fill(const Reply &in, pb::Reply &out) {

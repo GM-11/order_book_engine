@@ -80,6 +80,7 @@ struct Stamped {
 struct MarketEvent {
     SymbolId symbol;
     engine::EngineEvent event;
+    ClientOrderId client_order_id{};
 };
 
 struct Reply {

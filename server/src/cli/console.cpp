@@ -41,6 +41,10 @@ std::string_view to_string(engine::EventKind k) {
         return "HALTED";
     case K::Resumed:
         return "RESUMED";
+    case K::Rejected:
+        return "REJECTED";
+    case K::Expired:
+        return "EXPIRED";
     }
     return "?";
 }
@@ -94,6 +98,8 @@ std::string format_event(std::string_view ticker, const engine::EngineEvent &e) 
             s << " @ " << *e.price;
         if (e.limit_price)
             s << " limit " << *e.limit_price;
+        if (e.kind == engine::EventKind::Rejected)
+            s << " (" << to_string(e.reject_reason) << ')';
         break;
     }
     return s.str();

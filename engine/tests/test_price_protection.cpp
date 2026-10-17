@@ -44,11 +44,11 @@ TEST_CASE("One market order cannot sweep past its first out-of-band level") {
     CHECK(r.reject_reason == RejectReason::PriceBand);
     CHECK(book.best_ask() == 300);
 
-    // The market remainder must end in a Cancelled event, and no halt.
+    // The market remainder must end in an Expired event, and no halt.
     bool cancelled = false;
     for (const auto &e : book.drain_events()) {
         CHECK(e.kind != EventKind::Halted);
-        if (e.kind == EventKind::Cancelled && e.order_id == 20) {
+        if (e.kind == EventKind::Expired && e.order_id == 20) {
             cancelled = true;
             CHECK(e.quantity == 2);
         }
@@ -138,7 +138,7 @@ TEST_CASE("Market collar stops a market order at reference +/- collar") {
 
     bool cancelled = false;
     for (const auto &e : book.drain_events())
-        if (e.kind == EventKind::Cancelled && e.order_id == 20)
+        if (e.kind == EventKind::Expired && e.order_id == 20)
             cancelled = true;
     CHECK(cancelled);
     expect_sane(book);

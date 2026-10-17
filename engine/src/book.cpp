@@ -99,16 +99,26 @@ OrderResult Book::modify_order(OrderId order_id, OwnerId requester, Price new_pr
     emit({0, EventKind::Replaced, now, node->order.id, 0, node->order.owner_id, 0, node->order.side, node->order.price,
           node->order.quantity});
     remove_resting(node);
-    return add_order(replacement, now);
+    return add_order_core(replacement, now, false);
 }
 
-OrderResult Book::add_order(Order incoming, Timestamp now) {
-    const RejectReason invalid = validate_new_order(incoming, now);
-    if (invalid != RejectReason::None)
-        return {{}, incoming.quantity, invalid};
+void Book::emit_rejected(OrderId id, OwnerId owner, Side side, std::optional<Price> price, Quantity quantity,
+                         std::optional<Price> limit_price, RejectReason why, Timestamp now) {
+    emit({0, EventKind::Rejected, now, id, 0, owner, 0, side, price, quantity, limit_price, why});
+}
 
-    if (id_in_use(incoming.id))
-        return {{}, incoming.quantity, RejectReason::DuplicateOrderId};
+OrderResult Book::add_order(Order incoming, Timestamp now) { return add_order_core(incoming, now, true); }
+
+OrderResult Book::add_order_core(Order incoming, Timestamp now, bool report_reject) {
+    RejectReason invalid = validate_new_order(incoming, now);
+    if (invalid == RejectReason::None && id_in_use(incoming.id))
+        invalid = RejectReason::DuplicateOrderId;
+    if (invalid != RejectReason::None) {
+        if (report_reject)
+            emit_rejected(incoming.id, incoming.owner_id, incoming.side, incoming.price, incoming.quantity,
+                          std::nullopt, invalid, now);
+        return {{}, incoming.quantity, invalid};
+    }
 
     emit({0, EventKind::Accepted, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
           incoming.quantity});
@@ -203,7 +213,7 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
                     // the walk stopped rather than dropping silently.
                     result.unaccepted_quantity = incoming.quantity;
                     result.reject_reason = why;
-                    emit({0, EventKind::Cancelled, now, incoming.id, 0, incoming.owner_id, 0, incoming.side,
+                    emit({0, EventKind::Expired, now, incoming.id, 0, incoming.owner_id, 0, incoming.side,
                           incoming.price, incoming.quantity});
                 }
             } else {
@@ -211,7 +221,7 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
                 // rejection path instead of creating an invalid resting order.
                 result.unaccepted_quantity = incoming.quantity;
                 result.reject_reason = why;
-                emit({0, EventKind::Cancelled, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
+                emit({0, EventKind::Expired, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
                       incoming.quantity});
             }
         } else {
@@ -220,13 +230,13 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
             result.unaccepted_quantity = incoming.quantity;
             result.reject_reason = why;
             if (incoming.quantity > 0)
-                emit({0, EventKind::Cancelled, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
+                emit({0, EventKind::Expired, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
                       incoming.quantity});
         }
     } else if (plan.halted_by_self_trade) {
         result.unaccepted_quantity = incoming.quantity;
         result.reject_reason = RejectReason::SelfTrade;
-        emit({0, EventKind::Cancelled, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
+        emit({0, EventKind::Expired, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
               incoming.quantity});
     } else if (incoming.quantity > 0 && incoming.type == OrderType::Limit) {
         Node *node = node_pool_.acquire();
@@ -234,7 +244,7 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
             result.unaccepted_quantity = incoming.quantity;
             result.reject_reason = RejectReason::PoolExhausted;
             // The order was Accepted; it must still reach a terminal event.
-            emit({0, EventKind::Cancelled, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
+            emit({0, EventKind::Expired, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
                   incoming.quantity});
         } else {
             node->order = incoming;
@@ -255,7 +265,7 @@ OrderResult Book::add_order(Order incoming, Timestamp now) {
         result.reject_reason =
             plan.stopped_by_collar && incoming.quantity > 0 ? RejectReason::PriceCollar : RejectReason::None;
         if (incoming.type == OrderType::Market && incoming.quantity > 0)
-            emit({0, EventKind::Cancelled, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
+            emit({0, EventKind::Expired, now, incoming.id, 0, incoming.owner_id, 0, incoming.side, incoming.price,
                   incoming.quantity});
     }
 

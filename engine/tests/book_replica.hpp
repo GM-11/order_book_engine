@@ -94,6 +94,9 @@ class BookReplica {
         case EventKind::Resumed:
             halted_ = false;
             break;
+        case EventKind::Rejected: // never touched the book
+        case EventKind::Expired:  // discarded remainder of an order that never rested
+            break;
         }
     }
 

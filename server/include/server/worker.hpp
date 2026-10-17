@@ -27,7 +27,8 @@ class Worker {
   private:
     void run(); // the thread's loop
     engine::Book &book_for(SymbolId symbol);
-    void publish(SymbolId symbol, engine::Book &book); // drain events -> outbox
+    void publish(SymbolId symbol, engine::Book &book, engine::OrderId own_id = 0,
+                 const ClientOrderId &client_order_id = {});
     void reply(const Stamped &item, ClientOrderId client_order_id, SymbolId symbol, engine::OrderId order_id,
                engine::RejectReason reason, engine::Quantity unaccepted = 0,
                std::optional<engine::Price> rested_price = std::nullopt);

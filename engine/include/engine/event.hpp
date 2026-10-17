@@ -1,5 +1,6 @@
 #pragma once
 #include "engine/order.hpp"
+#include "engine/result.hpp"
 #include <cstdint>
 #include <optional>
 
@@ -19,6 +20,8 @@ enum class EventKind {
     StopModified,
     Halted,
     Resumed,
+    Rejected,
+    Expired,
 };
 
 struct EngineEvent {
@@ -36,5 +39,6 @@ struct EngineEvent {
     Quantity quantity; // fill qty, rested qty, or cancelled qty
     // Stop events only: the limit price of a stop-limit (empty = stop-market).
     std::optional<Price> limit_price = std::nullopt;
+    RejectReason reject_reason = RejectReason::None;
 };
 } // namespace engine

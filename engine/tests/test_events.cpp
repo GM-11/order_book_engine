@@ -8,8 +8,8 @@ using namespace engine;
 
 namespace {
 // Every Accepted must reach exactly one outcome before the id is accepted
-// again: fully filled by its own (aggressor) trades, Rested, or Cancelled.
-// Rested/Cancelled quantity plus filled quantity must equal what was accepted.
+// again: fully filled by its own (aggressor) trades, Rested, Cancelled or Expired.
+// Rested/Cancelled/Expired quantity plus filled quantity must equal what was accepted.
 void expect_every_order_terminates(const std::vector<EngineEvent> &events) {
     for (std::size_t i = 0; i < events.size(); ++i) {
         if (events[i].kind != EventKind::Accepted)
@@ -26,7 +26,7 @@ void expect_every_order_terminates(const std::vector<EngineEvent> &events) {
                 break;
             if (e.kind == EventKind::Trade)
                 filled += e.quantity;
-            if (e.kind == EventKind::Rested || e.kind == EventKind::Cancelled) {
+            if (e.kind == EventKind::Rested || e.kind == EventKind::Cancelled || e.kind == EventKind::Expired) {
                 CHECK(filled + e.quantity == accepted);
                 closed = true;
             }
@@ -209,7 +209,7 @@ TEST_CASE(
     const auto events = book.drain_events();
     REQUIRE(events.size() == 2);
     CHECK(events[0].kind == EventKind::Accepted);
-    CHECK(events[1].kind == EventKind::Cancelled);
+    CHECK(events[1].kind == EventKind::Expired);
     CHECK(events[1].order_id == 2);
     CHECK(events[1].quantity == 5);
     expect_every_order_terminates(events);

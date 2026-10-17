@@ -51,12 +51,12 @@ TEST_CASE("Market orders carry no price; limit orders must have one") {
         book.add_order({2, 2, Side::Buy, OrderType::Market, std::nullopt, 7},
                        1);
         const auto events = book.drain_events();
-        REQUIRE(events.size() == 3); // Accepted, Trade, Cancelled (2 left)
+        REQUIRE(events.size() == 3); // Accepted, Trade, Expired (2 left)
         CHECK(events[0].kind == EventKind::Accepted);
         CHECK_FALSE(events[0].price.has_value());
         CHECK(events[1].kind == EventKind::Trade);
         CHECK(events[1].price == 100);
-        CHECK(events[2].kind == EventKind::Cancelled);
+        CHECK(events[2].kind == EventKind::Expired);
         CHECK_FALSE(events[2].price.has_value());
         CHECK(events[2].quantity == 2);
     }
@@ -194,11 +194,14 @@ TEST_CASE("A stop the last trade has already reached is rejected on entry") {
               RejectReason::None);
     }
 
-    SECTION("nothing was emitted for a rejected stop") {
+    SECTION("a rejected stop emits only Rejected, never StopAccepted") {
         print_trade(book, 100, next, 0);
         book.drain_events();
         book.place_stop_order({1, 1, Side::Sell, 100, 1}, 1);
-        CHECK(book.drain_events().empty());
+        const auto events = book.drain_events();
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].kind == EventKind::Rejected);
+        CHECK(events[0].reject_reason == RejectReason::StopWouldTrigger);
     }
 }
 

@@ -87,6 +87,7 @@ class Book {
             throw std::invalid_argument("market_collar_bps must be in [0, 10000)");
     }
 
+    // A refused order also emits a Rejected event (it consumes a seq).
     OrderResult add_order(Order order, Timestamp now);
     OrderResult modify_order(OrderId order_id, OwnerId requester, Price new_price, Quantity new_qty, Timestamp now);
     RejectReason cancel_order(OrderId order_id, OwnerId requester, Timestamp now);
@@ -137,6 +138,12 @@ class Book {
     RejectReason validate_new_order(const Order &order, Timestamp now);
     RejectReason validate_stop_fields(const StopOrder &stop) const;
     MatchPlan plan_match(const Order &incoming) const;
+    // add_order's body. report_reject = false for internal re-entries (a
+    // triggered stop firing, a modify's replacement): only a NewOrder command
+    // gets a Rejected event.
+    OrderResult add_order_core(Order incoming, Timestamp now, bool report_reject);
+    void emit_rejected(OrderId id, OwnerId owner, Side side, std::optional<Price> price, Quantity quantity,
+                       std::optional<Price> limit_price, RejectReason why, Timestamp now);
 
     bool id_in_use(OrderId id) const;
     void remove_resting(Node *node);
@@ -200,7 +207,7 @@ class Book {
     SequenceNumber next_seq_ = 1;
     void emit(EngineEvent e) {
         e.sequence_number = next_seq_++;
-        if (e.kind == EventKind::Cancelled || e.kind == EventKind::StopCancelled)
+        if (e.kind == EventKind::Cancelled || e.kind == EventKind::StopCancelled || e.kind == EventKind::Expired)
             finished_orders_[e.order_id] = FinalState::Cancelled;
         if (e.kind == EventKind::Accepted || e.kind == EventKind::StopAccepted)
             owner_of_.emplace(e.order_id, e.owner_id); // first accept wins

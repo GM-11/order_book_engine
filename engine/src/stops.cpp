@@ -37,14 +37,15 @@ void Book::insert_dormant_stop(const StopOrder &stop, std::uint64_t priority) {
 }
 
 RejectReason Book::place_stop_order(StopOrder stop, Timestamp now) {
-    if (const RejectReason bad = validate_stop_fields(stop); bad != RejectReason::None)
+    RejectReason bad = validate_stop_fields(stop);
+    if (bad == RejectReason::None && id_in_use(stop.id))
+        bad = RejectReason::DuplicateOrderId;
+    if (bad == RejectReason::None && would_trigger_now(stop.side, stop.stop_price))
+        bad = RejectReason::StopWouldTrigger;
+    if (bad != RejectReason::None) {
+        emit_rejected(stop.id, stop.owner_id, stop.side, stop.stop_price, stop.quantity, stop.limit_price, bad, now);
         return bad;
-
-    if (id_in_use(stop.id))
-        return RejectReason::DuplicateOrderId;
-
-    if (would_trigger_now(stop.side, stop.stop_price))
-        return RejectReason::StopWouldTrigger;
+    }
 
     insert_dormant_stop(stop, next_back_priority_++);
     stop_ids_seen_.insert(stop.id);
@@ -147,9 +148,9 @@ void Book::check_and_trigger_stops(Price low_trade_price, Price high_trade_price
         // Fires under the stop's own id: a stop-limit becomes a limit order
         // (it may rest), a stop-market becomes a market order.
         if (s.limit_price)
-            add_order({s.id, s.owner_id, s.side, OrderType::Limit, s.limit_price, s.quantity}, now);
+            add_order_core({s.id, s.owner_id, s.side, OrderType::Limit, s.limit_price, s.quantity}, now, false);
         else
-            add_order({s.id, s.owner_id, s.side, OrderType::Market, std::nullopt, s.quantity}, now);
+            add_order_core({s.id, s.owner_id, s.side, OrderType::Market, std::nullopt, s.quantity}, now, false);
     }
     draining_stops_ = false;
 }

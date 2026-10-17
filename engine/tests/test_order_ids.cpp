@@ -14,7 +14,11 @@ TEST_CASE("A resting order id cannot be reused while the order is live") {
         book.add_order({1, 22, Side::Buy, OrderType::Limit, 101, 1}, 2);
     CHECK(dup.reject_reason == RejectReason::DuplicateOrderId);
     CHECK(dup.unaccepted_quantity == 1);
-    CHECK(book.drain_events().empty()); // rejected: never Accepted
+    // rejected: never Accepted, just one Rejected event
+    const auto events = book.drain_events();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].kind == EventKind::Rejected);
+    CHECK(events[0].reject_reason == RejectReason::DuplicateOrderId);
     CHECK(book.best_bid() == 100);      // the original is untouched
 
     // The original stays reachable: one cancel empties the book.

@@ -89,6 +89,8 @@ TEST_CASE("Every event kind maps to its own wire value, never UNSPECIFIED", "[fe
         {EventKind::StopModified, pb::EVENT_KIND_STOP_MODIFIED},
         {EventKind::Halted, pb::EVENT_KIND_HALTED},
         {EventKind::Resumed, pb::EVENT_KIND_RESUMED},
+        {EventKind::Rejected, pb::EVENT_KIND_REJECTED},
+        {EventKind::Expired, pb::EVENT_KIND_EXPIRED},
     };
     std::set<int> seen;
     for (const auto &[kind, wire] : all) {
@@ -194,4 +196,26 @@ TEST_CASE("A snapshot keeps every order in order, stops, last trade and halt", "
 
     SnapshotReady empty{};
     CHECK_FALSE(decode(empty).snapshot().has_last_trade_price());
+}
+
+TEST_CASE("Rejected carries its reason; client_order_id is set only when present", "[feed_codec]") {
+    engine::EngineEvent e{};
+    e.kind = EventKind::Rejected;
+    e.reject_reason = RejectReason::PriceBand;
+    e.quantity = 7;
+    auto m = decode(MarketEvent{1, e, "abc"}).event();
+    CHECK(m.kind() == pb::EVENT_KIND_REJECTED);
+    CHECK(m.reject_reason() == pb::REJECT_REASON_PRICE_BAND);
+    CHECK(m.client_order_id() == "abc");
+    CHECK(m.quantity() == 7);
+
+    e.kind = EventKind::Expired;
+    e.reject_reason = RejectReason::None;
+    m = decode(MarketEvent{1, e}).event();
+    CHECK(m.kind() == pb::EVENT_KIND_EXPIRED);
+    CHECK(m.client_order_id().empty());
+    CHECK(m.reject_reason() == pb::REJECT_REASON_UNSPECIFIED); // REJECTED only
+
+    e.kind = EventKind::Trade;
+    CHECK(decode(MarketEvent{1, e}).event().reject_reason() == pb::REJECT_REASON_UNSPECIFIED);
 }

@@ -157,7 +157,11 @@ TEST_CASE("Finished order ids cannot be reused") {
         CHECK(book.place_stop_order({1, 9, Side::Sell, 80, 1}, 4) ==
               RejectReason::DuplicateOrderId);
     }
-    CHECK(book.drain_events().empty());
+    // Refused: one Rejected event, nothing Accepted or traded.
+    const auto events = book.drain_events();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].kind == EventKind::Rejected);
+    CHECK(events[0].reject_reason == RejectReason::DuplicateOrderId);
     CHECK_FALSE(book.best_bid().has_value());
 }
 

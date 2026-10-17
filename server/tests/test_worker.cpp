@@ -10,6 +10,7 @@
 #include "client_ids.hpp"
 #include "server/worker.hpp"
 #include "server/codec.hpp"
+#include "server/feed_codec.hpp"
 #include "server/router.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -484,4 +485,102 @@ TEST_CASE("Replaying the same journal twice gives identical order ids", "[worker
         CHECK(first[i].client_order_id == second[i].client_order_id);
         CHECK(first[i].account_id == second[i].account_id);
     }
+}
+
+// ------------------------------------------- client_order_id on order events
+
+namespace {
+std::vector<MarketEvent> run_events(const std::vector<Stamped> &journal) {
+    BlockingQueue<Output> out;
+    {
+        Worker w(out);
+        w.add_book(1, std::make_unique<engine::Book>());
+        w.start();
+        for (const Stamped &s : journal)
+            w.submit(s);
+    }
+    return events_of(drain(out));
+}
+
+Stamped stamped(Seq seq, Command command) {
+    return Stamped{.seq = seq, .ts = static_cast<engine::Timestamp>(seq), .command = std::move(command), .gateway_id = "gw", .account_id = 1};
+}
+} // namespace
+
+TEST_CASE("Accepted, StopAccepted, Rejected and Expired carry the command's client order id; the rest carry none",
+          "[worker]") {
+    engine::StopOrder stop{};
+    stop.id = 0;
+    stop.owner_id = 3;
+    stop.side = engine::Side::Sell;
+    stop.stop_price = 90;
+    stop.quantity = 2;
+    engine::Order market = limit(0, 2, engine::Side::Buy, 0, 9);
+    market.type = engine::OrderType::Market;
+    market.price = std::nullopt;
+
+    const auto events = run_events({
+        stamped(1, NewOrder{"sell-1", 1, limit(0, 1, engine::Side::Sell, 100, 4)}),  // Accepted, Rested
+        stamped(2, NewOrder{"mkt-2", 1, market}),                                    // Accepted, Trade, Expired
+        stamped(3, NewOrder{"bad-3", 1, limit(0, 1, engine::Side::Buy, 0, 5)}),      // Rejected
+        stamped(4, PlaceStop{"stop-4", 1, stop}),                                    // StopAccepted
+        stamped(5, CancelOrder{"", 1, 1, 1}),                                        // Cancelled (owner 1 cancels order 1: already traded)
+    });
+
+    std::map<EventKind, std::vector<std::string>> ids;
+    for (const MarketEvent &m : events)
+        ids[m.event.kind].push_back(m.client_order_id);
+
+    CHECK(ids[EventKind::Accepted] == std::vector<std::string>{"sell-1", "mkt-2"});
+    CHECK(ids[EventKind::Rejected] == std::vector<std::string>{"bad-3"});
+    CHECK(ids[EventKind::Expired] == std::vector<std::string>{"mkt-2"});
+    CHECK(ids[EventKind::StopAccepted] == std::vector<std::string>{"stop-4"});
+    for (EventKind k : {EventKind::Rested, EventKind::Trade, EventKind::Cancelled, EventKind::StopTriggered})
+        for (const std::string &id : ids[k])
+            CHECK(id.empty());
+}
+
+TEST_CASE("A stop fired by another command's trade gets no client order id", "[worker]") {
+    engine::StopOrder stop{};
+    stop.owner_id = 3;
+    stop.side = engine::Side::Buy;
+    stop.stop_price = 100;
+    stop.quantity = 1;
+    stop.limit_price = std::nullopt; // stop-market
+
+    const auto events = run_events({
+        stamped(1, PlaceStop{"stop-1", 1, stop}),
+        stamped(2, NewOrder{"ask-2", 1, limit(0, 1, engine::Side::Sell, 100, 1)}),
+        stamped(3, NewOrder{"bid-3", 1, limit(0, 2, engine::Side::Buy, 100, 1)}), // trades, wakes stop 1
+    });
+    bool saw_refire = false;
+    for (const MarketEvent &m : events)
+        if (m.event.kind == EventKind::Accepted && m.event.order_id == 1) { // the stop re-entering as a market order
+            saw_refire = true;
+            CHECK(m.client_order_id.empty());
+        }
+    CHECK(saw_refire);
+}
+
+TEST_CASE("Replaying the same sequenced commands gives byte-identical events", "[worker]") {
+    engine::Order market = limit(0, 2, engine::Side::Buy, 0, 9);
+    market.type = engine::OrderType::Market;
+    market.price = std::nullopt;
+    const std::vector<Stamped> journal{
+        stamped(1, NewOrder{"a", 1, limit(0, 1, engine::Side::Sell, 100, 4)}),
+        stamped(2, NewOrder{"b", 1, market}),                                   // trades 4, Expires 5
+        stamped(3, NewOrder{"c", 1, limit(0, 1, engine::Side::Buy, 0, 5)}),     // Rejected
+        stamped(4, NewOrder{"d", 1, limit(0, 2, engine::Side::Buy, 99, 5)}),
+    };
+    const auto first = run_events(journal);
+    const auto second = run_events(journal);
+    REQUIRE(first.size() == second.size());
+    bool saw_rejected = false, saw_expired = false;
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        CHECK(encode_feed_item(first[i]) == encode_feed_item(second[i]));
+        saw_rejected |= first[i].event.kind == EventKind::Rejected;
+        saw_expired |= first[i].event.kind == EventKind::Expired;
+    }
+    CHECK(saw_rejected);
+    CHECK(saw_expired);
 }
