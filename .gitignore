@@ -2,3 +2,5 @@ build
 .cache
 build-tsan
 *.supp
+bench
+build-node
