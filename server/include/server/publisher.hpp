@@ -40,6 +40,8 @@ enum class SubscribeError {
     GatewayAlreadySubscribed,
     UnknownSymbol,
     Closed,
+    BadFromSeq,
+    TooOld,
 };
 
 class Subscription {
@@ -67,6 +69,7 @@ class Subscription {
 
 struct PublisherOptions {
     std::size_t queue_capacity = 65536; // per subscriber, in items
+    std::size_t replay_window = 100000;
     std::function<void(const Output &)> tap{};
 };
 
@@ -76,6 +79,8 @@ struct PublisherStats {
     std::uint64_t slow_consumer_drops = 0;
     std::size_t market_subscribers = 0;  // open right now
     std::size_t replies_subscribers = 0; // open right now
+    std::uint64_t replayed_events = 0;
+    std::uint64_t too_old_refusals = 0;
 };
 
 class MarketDataPublisher {
@@ -94,19 +99,24 @@ class MarketDataPublisher {
     struct SubscribeResult {
         std::shared_ptr<Subscription> subscription; // set when error == None
         SubscribeError error = SubscribeError::None;
+        std::string detail;
     };
-    SubscribeResult subscribe(std::string gateway_id, std::vector<SymbolId> symbols);
+    SubscribeResult subscribe(std::string gateway_id, std::vector<SymbolId> symbols,
+                              std::unordered_map<SymbolId, Seq> from_seq = {});
     SubscribeResult subscribe_replies(std::string gateway_id);
     void unsubscribe(SubscriberId id);
 
     PublisherStats stats() const;
 
   private:
+    struct SymbolState {
+        bool live = false;  // false = waiting for its snapshot
+        Seq skip_below = 0; // drop events with seq < this: a from_seq subscriber asking for a seq not yet produced
+    };
     struct Subscriber {
         std::shared_ptr<Subscription> sub;
         SubscriberKind kind = SubscriberKind::Market;
-        std::unordered_map<SymbolId, bool>
-            live; // Market only. Per symbol: false = waiting for its snapshot, true = live.
+        std::unordered_map<SymbolId, SymbolState> live; // Market only. Per symbol: snapshot/replay state.
     };
 
     void run();
@@ -126,6 +136,14 @@ class MarketDataPublisher {
     SubscriberId next_id_ = 1;
     bool closed_ = false;
     PublisherStats stats_;
+
+    // Last `replay_window` events per symbol, so a reconnecting subscriber can ask for
+    // everything after its last seq (from_seq) instead of a snapshot. Guarded by mutex_.
+    std::unordered_map<SymbolId, std::deque<MarketEvent>> history_;
+    // Highest seq seen per symbol, kept even when history is empty or trimmed: tells
+    // "too old" (below the window) from "ahead" (not happened yet). Guarded by mutex_.
+    std::unordered_map<SymbolId, Seq> last_seq_;
+    void remember(const MarketEvent &event); // called with mutex_ held
 
     bool started_ = false;
     std::jthread thread_; // MUST be the last member

@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <map>
 #include <memory>
 #include <thread>
 
@@ -79,11 +80,14 @@ struct Stream {
     grpc::ClientContext context;
     std::unique_ptr<grpc::ClientReader<pb::FeedMessage>> reader;
 
-    Stream(pb::EngineFeed::Stub &stub, const std::string &gateway, std::vector<std::uint32_t> symbols = {}) {
+    Stream(pb::EngineFeed::Stub &stub, const std::string &gateway, std::vector<std::uint32_t> symbols = {},
+           std::map<std::uint32_t, std::uint64_t> from_seq = {}) {
         pb::FeedSubscribeRequest request;
         request.set_gateway_id(gateway);
         for (auto s : symbols)
             request.add_symbols(s);
+        for (const auto &[symbol, seq] : from_seq)
+            (*request.mutable_from_seq())[symbol] = seq;
         context.set_deadline(std::chrono::system_clock::now() + 20s);
         reader = stub.Subscribe(&context, request);
     }
@@ -290,4 +294,45 @@ TEST_CASE("A gateway that stops reading is dropped with RESOURCE_EXHAUSTED", "[e
 
     // Reading again unblocks the handler, which then reports why it ended.
     CHECK(drain_to_end(slow).error_code() == grpc::StatusCode::RESOURCE_EXHAUSTED);
+}
+
+TEST_CASE("from_seq replays retained events first, never a snapshot", "[engine_feed]") {
+    Rig rig;
+    for (engine::OrderId id = 1; id <= 5; ++id) // resting buys: two events each (seqs 1..10)
+        rig.order(id, "x", id, 1, engine::Side::Buy, 100, 1);
+    for (int i = 0; i < 500 && rig.publisher->stats().events_routed < 10; ++i)
+        std::this_thread::sleep_for(10ms);
+    REQUIRE(rig.publisher->stats().events_routed == 10);
+
+    Stream stream(*rig.stub, "bridge", {1}, {{1, 8}});
+    for (std::uint64_t want = 8; want <= 10; ++want) {
+        const auto msg = stream.read();
+        REQUIRE(msg.has_event());
+        CHECK(msg.event().seq() == want);
+    }
+    rig.order(6, "x", 6, 1, engine::Side::Buy, 100, 1); // live event continues the sequence
+    const auto live = stream.read();
+    REQUIRE(live.has_event());
+    CHECK(live.event().seq() == 11);
+}
+
+TEST_CASE("from_seq older than the replay window is OUT_OF_RANGE", "[engine_feed]") {
+    Rig rig(PublisherOptions{.replay_window = 2});
+    for (engine::OrderId id = 1; id <= 5; ++id)
+        rig.order(id, "x", id, 1, engine::Side::Buy, 100, 1);
+    for (int i = 0; i < 500 && rig.publisher->stats().events_routed < 10; ++i)
+        std::this_thread::sleep_for(10ms);
+    REQUIRE(rig.publisher->stats().events_routed == 10);
+
+    Stream stream(*rig.stub, "bridge", {1}, {{1, 1}});
+    const grpc::Status status = drain_to_end(stream);
+    CHECK(status.error_code() == grpc::StatusCode::OUT_OF_RANGE);
+    CHECK(status.error_message().find("symbol 1") != std::string::npos);
+    CHECK(status.error_message().find("sequence 1") != std::string::npos);
+}
+
+TEST_CASE("from_seq for a symbol that is not subscribed is INVALID_ARGUMENT", "[engine_feed]") {
+    Rig rig;
+    Stream stream(*rig.stub, "bridge", {1}, {{2, 1}});
+    CHECK(drain_to_end(stream).error_code() == grpc::StatusCode::INVALID_ARGUMENT);
 }

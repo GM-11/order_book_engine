@@ -13,6 +13,7 @@
 #include <iostream>
 #include <memory>
 #include <pthread.h>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -42,6 +43,19 @@ struct ShutdownInOrder {
         feed_server.stop();
     }
 };
+
+std::size_t parse_replay_window(const std::string &text) {
+    std::size_t used = 0;
+    unsigned long long value = 0;
+    try {
+        if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
+            throw std::invalid_argument("not a digit string");
+        value = std::stoull(text, &used);
+    } catch (const std::exception &) {
+        throw std::runtime_error("ENGINE_REPLAY_WINDOW must be a non-negative integer, got \"" + text + "\"");
+    }
+    return static_cast<std::size_t>(value);
+}
 
 } // namespace
 
@@ -88,6 +102,9 @@ int main(int argc, char *argv[]) {
             worker->start();
 
         server::PublisherOptions publisher_options;
+        if (const char *window_env = std::getenv("ENGINE_REPLAY_WINDOW"))
+            publisher_options.replay_window = parse_replay_window(window_env);
+        const std::size_t replay_window = publisher_options.replay_window;
         if (!quiet)
             publisher_options.tap = [&ticker_of](const server::Output &out) {
                 if (auto *market = std::get_if<server::MarketEvent>(&out))
@@ -133,7 +150,8 @@ int main(int argc, char *argv[]) {
             cli::say("engine_node: " + std::to_string(instruments.instruments.size()) + " symbols on " +
                      std::to_string(worker_count) + " workers (instruments v" + std::to_string(instruments.version) +
                      " from " + instruments_path + "), sequencer at " + address + ", engine feed on " + feed_address +
-                     " (port " + std::to_string(feed_server.port()) + "). Ctrl-C to stop.");
+                     " (port " + std::to_string(feed_server.port()) + "), replay window " +
+                     std::to_string(replay_window) + " per symbol. Ctrl-C to stop.");
             for (auto &feed : feeds)
                 feed->start();
 

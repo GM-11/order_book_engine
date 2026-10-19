@@ -9,6 +9,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -26,9 +27,11 @@ class FeedService final : public pb::EngineFeed::Service {
     grpc::Status Subscribe(grpc::ServerContext *context, const pb::FeedSubscribeRequest *request,
                            grpc::ServerWriter<pb::FeedMessage> *writer) override {
         std::vector<SymbolId> symbols(request->symbols().begin(), request->symbols().end());
-        auto result = publisher_.subscribe(request->gateway_id(), std::move(symbols));
+        std::unordered_map<SymbolId, Seq> from_seq(request->from_seq().begin(), request->from_seq().end());
+        auto result = publisher_.subscribe(request->gateway_id(), std::move(symbols), std::move(from_seq));
         if (result.error != SubscribeError::None)
-            return refusal(result.error, request->gateway_id(), "Subscribe");
+            return refusal(result.error, request->gateway_id(), "Subscribe", result.detail);
+        writer->SendInitialMetadata();
         return pump(
             context, *result.subscription, writer, "market",
             [](const FeedItem &item, pb::FeedMessage &out) {
@@ -61,7 +64,8 @@ class FeedService final : public pb::EngineFeed::Service {
     }
 
   private:
-    static grpc::Status refusal(SubscribeError error, const std::string &gateway_id, const char *rpc) {
+    static grpc::Status refusal(SubscribeError error, const std::string &gateway_id, const char *rpc,
+                                const std::string &detail = {}) {
         switch (error) {
         case SubscribeError::EmptyGatewayId:
             return {grpc::StatusCode::INVALID_ARGUMENT, "gateway_id must not be empty"};
@@ -71,6 +75,11 @@ class FeedService final : public pb::EngineFeed::Service {
             return {grpc::StatusCode::NOT_FOUND, "unknown symbol in request"};
         case SubscribeError::Closed:
             return {grpc::StatusCode::UNAVAILABLE, "engine is shutting down"};
+        case SubscribeError::BadFromSeq:
+            return {grpc::StatusCode::INVALID_ARGUMENT, detail.empty() ? "invalid from_seq" : detail};
+        case SubscribeError::TooOld:
+            return {grpc::StatusCode::OUT_OF_RANGE,
+                    detail.empty() ? "requested events are no longer retained" : detail};
         case SubscribeError::None:
             break;
         }

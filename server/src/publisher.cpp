@@ -81,53 +81,109 @@ void MarketDataPublisher::join() {
 }
 
 MarketDataPublisher::SubscribeResult MarketDataPublisher::subscribe(std::string gateway_id,
-                                                                    std::vector<SymbolId> symbols) {
+                                                                    std::vector<SymbolId> symbols,
+                                                                    std::unordered_map<SymbolId, Seq> from_seq) {
     if (gateway_id.empty())
-        return {nullptr, SubscribeError::EmptyGatewayId};
+        return {nullptr, SubscribeError::EmptyGatewayId, "gateway_id is empty"};
     if (symbols.empty())
         symbols = symbol_list_;
+
     std::sort(symbols.begin(), symbols.end());
     symbols.erase(std::unique(symbols.begin(), symbols.end()), symbols.end());
+
     for (SymbolId s : symbols)
         if (!symbols_.contains(s))
-            return {nullptr, SubscribeError::UnknownSymbol};
+            return {nullptr, SubscribeError::UnknownSymbol, "unknown symbol"};
+
+    for (const auto &[symbol, seq] : from_seq) {
+        if (!std::binary_search(symbols.begin(), symbols.end(), symbol) || seq < 1)
+            return {nullptr, SubscribeError::BadFromSeq, "from_seq must name a subscribed symbol and be at least 1"};
+    }
 
     std::shared_ptr<Subscription> sub;
+    std::vector<SymbolId> snapshots;
     {
         std::lock_guard lock(mutex_);
         if (closed_)
-            return {nullptr, SubscribeError::Closed};
+            return {nullptr, SubscribeError::Closed, "closed"};
         if (market_by_gateway_.contains(gateway_id))
-            return {nullptr, SubscribeError::GatewayAlreadySubscribed};
+            return {nullptr, SubscribeError::GatewayAlreadySubscribed, "gateway_id is already subscribed"};
+
+        for (const auto &[symbol, wanted] : from_seq) {
+            const Seq last = last_seq_.contains(symbol) ? last_seq_.at(symbol) : 0;
+            const auto history = history_.find(symbol);
+            const Seq oldest = history == history_.end() || history->second.empty()
+                                   ? last + 1
+                                   : history->second.front().event.sequence_number;
+            if (wanted <= last && wanted < oldest) {
+                ++stats_.too_old_refusals;
+                return {nullptr, SubscribeError::TooOld,
+                        "requested sequence " + std::to_string(wanted) + " for symbol " + std::to_string(symbol) +
+                            " is older than the oldest retained event " + std::to_string(oldest)};
+            }
+        }
+
+        std::size_t replay_count = 0;
+        for (const auto &[symbol, wanted] : from_seq) {
+            const auto history = history_.find(symbol);
+            if (history == history_.end())
+                continue;
+            for (const MarketEvent &event : history->second)
+                if (event.event.sequence_number >= wanted)
+                    ++replay_count;
+        }
+
         const SubscriberId id = next_id_++;
-        sub = std::make_shared<Subscription>(id, gateway_id, options_.queue_capacity);
+        sub = std::make_shared<Subscription>(id, gateway_id, options_.queue_capacity + replay_count);
+        for (SymbolId symbol : symbols) {
+            const auto from = from_seq.find(symbol);
+            if (from == from_seq.end()) {
+                snapshots.push_back(symbol);
+            } else {
+                const auto history = history_.find(symbol);
+                if (history == history_.end())
+                    continue;
+                for (const MarketEvent &event : history->second) {
+                    if (event.event.sequence_number >= from->second) {
+                        if (!sub->try_push(event))
+                            throw std::logic_error("replay does not fit subscription queue");
+                        ++stats_.replayed_events;
+                    }
+                }
+            }
+        }
+
         Subscriber entry{sub, SubscriberKind::Market, {}};
-        for (SymbolId s : symbols)
-            entry.live.emplace(s, false); // waiting for its snapshot
+        for (SymbolId symbol : symbols) {
+            const auto from = from_seq.find(symbol);
+            entry.live.emplace(symbol,
+                               from == from_seq.end() ? SymbolState{false, 0} : SymbolState{true, from->second});
+        }
         subscribers_.emplace(id, std::move(entry));
         market_by_gateway_.emplace(std::move(gateway_id), id);
     }
-    // Registered first, then asked: the snapshot can only reach the outbox
-    // after this subscriber exists, so it can never be missed.
-    for (SymbolId s : symbols)
-        request_snapshot_(s, sub->id());
-    return {sub, SubscribeError::None};
+
+    // Snapshot symbols are registered before requesting their snapshots, so
+    // a snapshot cannot be missed. Replay symbols are already live.
+    for (SymbolId symbol : snapshots)
+        request_snapshot_(symbol, sub->id());
+    return {sub, SubscribeError::None, {}};
 }
 
 MarketDataPublisher::SubscribeResult MarketDataPublisher::subscribe_replies(std::string gateway_id) {
     if (gateway_id.empty())
-        return {nullptr, SubscribeError::EmptyGatewayId};
+        return {nullptr, SubscribeError::EmptyGatewayId, "gateway_id is empty"};
     std::lock_guard lock(mutex_);
     if (closed_)
-        return {nullptr, SubscribeError::Closed};
+        return {nullptr, SubscribeError::Closed, "closed"};
     if (replies_by_gateway_.contains(gateway_id))
-        return {nullptr, SubscribeError::GatewayAlreadySubscribed};
+        return {nullptr, SubscribeError::GatewayAlreadySubscribed, "gateway_id is already subscribed"};
     const SubscriberId id = next_id_++;
     auto sub = std::make_shared<Subscription>(id, gateway_id, options_.queue_capacity);
     // No live map: route() never gives it a MarketEvent or a snapshot.
     subscribers_.emplace(id, Subscriber{sub, SubscriberKind::Replies, {}});
     replies_by_gateway_.emplace(std::move(gateway_id), id);
-    return {sub, SubscribeError::None};
+    return {sub, SubscribeError::None, {}};
 }
 
 void MarketDataPublisher::unsubscribe(SubscriberId id) {
@@ -175,12 +231,15 @@ void MarketDataPublisher::run() {
 
 void MarketDataPublisher::route(Output &out) {
     if (auto *event = std::get_if<MarketEvent>(&out)) { // public
+        remember(*event);
         ++stats_.events_routed;
         std::vector<SubscriberId> too_slow;
         for (auto &[id, entry] : subscribers_) {
             const auto symbol = entry.live.find(event->symbol);
-            if (symbol == entry.live.end() || !symbol->second)
-                continue; // a Replies subscriber, not subscribed, or still waiting for the snapshot
+            if (symbol == entry.live.end() || !symbol->second.live)
+                continue;
+            if (event->event.sequence_number < symbol->second.skip_below)
+                continue;
             if (!entry.sub->try_push(*event))
                 too_slow.push_back(id);
         }
@@ -204,9 +263,9 @@ void MarketDataPublisher::route(Output &out) {
         if (it == subscribers_.end())
             return; // it left before its snapshot was ready
         const auto symbol = it->second.live.find(ready->symbol);
-        if (symbol == it->second.live.end() || symbol->second)
+        if (symbol == it->second.live.end() || symbol->second.live)
             return; // not asked for, or already live: ignore
-        symbol->second = true;
+        symbol->second.live = true;
         const SubscriberId id = ready->subscriber;
         if (!it->second.sub->try_push(std::move(*ready))) {
             ++stats_.slow_consumer_drops;
@@ -215,4 +274,13 @@ void MarketDataPublisher::route(Output &out) {
     }
 }
 
+void MarketDataPublisher::remember(const MarketEvent &event) {
+    auto &kept = history_[event.symbol];
+    kept.push_back(event);
+    if (options_.replay_window == 0)
+        kept.clear();
+    else if (kept.size() > options_.replay_window)
+        kept.pop_front();
+    last_seq_[event.symbol] = event.event.sequence_number;
+}
 } // namespace server

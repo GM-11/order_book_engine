@@ -1,7 +1,7 @@
 // Tests for MarketDataPublisher: who gets what, in what order, and what
 // happens to subscribers that join late or fall behind. Run under TSan too.
-#include "seq_of.hpp"
 #include "client_ids.hpp"
+#include "seq_of.hpp"
 #include "server/publisher.hpp"
 #include "server/worker.hpp"
 
@@ -79,6 +79,23 @@ void finish(BlockingQueue<Output> &outbox, MarketDataPublisher &pub) {
     pub.join();
 }
 
+// Routes events from..to for `symbol` and waits until the publisher has them.
+void publish_range(BlockingQueue<Output> &outbox, MarketDataPublisher &pub, SymbolId symbol, Seq from, Seq to) {
+    const auto before = pub.stats().events_routed;
+    for (Seq seq = from; seq <= to; ++seq)
+        outbox.push(event(symbol, seq));
+    REQUIRE(eventually([&] { return pub.stats().events_routed == before + (to - from + 1); }));
+}
+
+// Seqs of the market events currently queued for `sub`.
+std::vector<Seq> drain_seqs(Subscription &sub) {
+    std::vector<Seq> seqs;
+    while (auto item = sub.next_for(10ms))
+        if (const auto *e = std::get_if<MarketEvent>(&*item))
+            seqs.push_back(e->event.sequence_number);
+    return seqs;
+}
+
 } // namespace
 
 TEST_CASE("subscribe validates its input", "[publisher]") {
@@ -120,6 +137,220 @@ TEST_CASE("subscribe asks for one snapshot per symbol; empty list means every sy
         {1, some.subscription->id()}, {3, some.subscription->id()},
     };
     CHECK(req.calls == expected);
+}
+
+TEST_CASE("from_seq replays retained events and then receives live events", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn());
+    pub.start();
+
+    for (Seq seq = 1; seq <= 3; ++seq)
+        outbox.push(event(1, seq));
+    REQUIRE(eventually([&] { return pub.stats().events_routed == 3; }));
+
+    auto result = pub.subscribe("gw", {1}, {{1, 2}});
+    REQUIRE(result.error == SubscribeError::None);
+    CHECK(req.calls.empty());
+
+    outbox.push(event(1, 4));
+    finish(outbox, pub);
+
+    CHECK(std::get<MarketEvent>(next(*result.subscription)).event.sequence_number == 2);
+    CHECK(std::get<MarketEvent>(next(*result.subscription)).event.sequence_number == 3);
+    CHECK(std::get<MarketEvent>(next(*result.subscription)).event.sequence_number == 4);
+    CHECK_FALSE(result.subscription->next_for(10ms).has_value());
+    CHECK(pub.stats().replayed_events == 2);
+}
+
+TEST_CASE("from_seq rejects invalid requests and unavailable replay history", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn(), PublisherOptions{.replay_window = 2});
+    pub.start();
+
+    CHECK(pub.subscribe("wrong-symbol", {1}, {{2, 1}}).error == SubscribeError::BadFromSeq);
+    CHECK(pub.subscribe("zero-sequence", {1}, {{1, 0}}).error == SubscribeError::BadFromSeq);
+
+    for (Seq seq = 1; seq <= 3; ++seq)
+        outbox.push(event(1, seq));
+    REQUIRE(eventually([&] { return pub.stats().events_routed == 3; }));
+
+    const auto too_old = pub.subscribe("too-old", {1}, {{1, 1}});
+    CHECK(too_old.error == SubscribeError::TooOld);
+    CHECK_FALSE(too_old.subscription);
+    CHECK(pub.stats().too_old_refusals == 1);
+    finish(outbox, pub);
+}
+
+TEST_CASE("from_seq equal to last + 1 gets live events only", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn());
+    pub.start();
+    publish_range(outbox, pub, 1, 1, 3);
+
+    auto result = pub.subscribe("gw", {1}, {{1, 4}});
+    REQUIRE(result.error == SubscribeError::None);
+    CHECK_FALSE(result.subscription->next_for(10ms).has_value()); // nothing replayed
+    publish_range(outbox, pub, 1, 4, 5);
+    CHECK(drain_seqs(*result.subscription) == std::vector<Seq>{4, 5});
+    CHECK(pub.stats().replayed_events == 0);
+    finish(outbox, pub);
+}
+
+TEST_CASE("a too-old refusal registers nothing, so the same gateway id can retry", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn(), PublisherOptions{.replay_window = 3});
+    pub.start();
+    publish_range(outbox, pub, 1, 1, 10);
+
+    const auto refused = pub.subscribe("gw", {1}, {{1, 3}});
+    CHECK(refused.error == SubscribeError::TooOld);
+    CHECK(refused.detail.find("symbol 1") != std::string::npos);
+    CHECK(refused.detail.find("3") != std::string::npos);
+    CHECK(refused.detail.find("8") != std::string::npos); // oldest retained
+    CHECK(pub.stats().market_subscribers == 0);
+
+    auto again = pub.subscribe("gw", {1}, {{1, 8}});
+    REQUIRE(again.error == SubscribeError::None);
+    CHECK(drain_seqs(*again.subscription) == std::vector<Seq>{8, 9, 10});
+    finish(outbox, pub);
+}
+
+TEST_CASE("from_seq ahead of the stream waits for its number", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn());
+    pub.start();
+    publish_range(outbox, pub, 1, 1, 3);
+
+    auto result = pub.subscribe("gw", {1}, {{1, 6}});
+    REQUIRE(result.error == SubscribeError::None);
+    publish_range(outbox, pub, 1, 4, 8);
+    CHECK(drain_seqs(*result.subscription) == std::vector<Seq>{6, 7, 8});
+    finish(outbox, pub);
+}
+
+TEST_CASE("from_seq for one symbol still snapshots the others", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1, 2}, req.fn());
+    pub.start();
+    publish_range(outbox, pub, 1, 1, 2);
+
+    auto result = pub.subscribe("gw", {}, {{1, 1}});
+    REQUIRE(result.error == SubscribeError::None);
+    const std::vector<std::pair<SymbolId, SubscriberId>> expected{{2, result.subscription->id()}};
+    CHECK(req.calls == expected);
+
+    publish_range(outbox, pub, 2, 1, 1); // symbol 2 is waiting for its snapshot: skipped
+    publish_range(outbox, pub, 1, 3, 3);
+    std::vector<Seq> seqs;
+    while (auto item = result.subscription->next_for(10ms)) {
+        const auto *e = std::get_if<MarketEvent>(&*item);
+        REQUIRE(e != nullptr); // no snapshot ever arrives for symbol 1
+        CHECK(e->symbol == 1);
+        seqs.push_back(e->event.sequence_number);
+    }
+    CHECK(seqs == std::vector<Seq>{1, 2, 3});
+    finish(outbox, pub);
+}
+
+TEST_CASE("replay_window 0 keeps nothing: old is refused, ahead works", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn(), PublisherOptions{.replay_window = 0});
+    pub.start();
+    publish_range(outbox, pub, 1, 1, 3);
+
+    CHECK(pub.subscribe("old", {1}, {{1, 3}}).error == SubscribeError::TooOld);
+    auto ahead = pub.subscribe("ahead", {1}, {{1, 6}});
+    REQUIRE(ahead.error == SubscribeError::None);
+    publish_range(outbox, pub, 1, 4, 7);
+    CHECK(drain_seqs(*ahead.subscription) == std::vector<Seq>{6, 7});
+    finish(outbox, pub);
+}
+
+TEST_CASE("the replay window is trimmed per symbol", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn(), PublisherOptions{.replay_window = 5});
+    pub.start();
+    publish_range(outbox, pub, 1, 1, 10);
+
+    auto ok = pub.subscribe("ok", {1}, {{1, 6}});
+    REQUIRE(ok.error == SubscribeError::None);
+    CHECK(drain_seqs(*ok.subscription) == std::vector<Seq>{6, 7, 8, 9, 10});
+    CHECK(pub.subscribe("old", {1}, {{1, 5}}).error == SubscribeError::TooOld);
+    finish(outbox, pub);
+}
+
+TEST_CASE("a dropped slow consumer can resume from its last seq with nothing missing", "[publisher]") {
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn(), PublisherOptions{.queue_capacity = 3});
+    pub.start();
+    auto slow = pub.subscribe("bridge", {1}, {{1, 1}}).subscription;
+
+    outbox.push(event(1, 1));
+    outbox.push(event(1, 2));
+    // Read 1, 2; then fall behind on 3..10 (queue of 3 overflows).
+    CHECK(std::get<MarketEvent>(next(*slow)).event.sequence_number == 1);
+    CHECK(std::get<MarketEvent>(next(*slow)).event.sequence_number == 2);
+    for (Seq seq = 3; seq <= 10; ++seq)
+        outbox.push(event(1, seq));
+    REQUIRE(eventually([&] { return slow->ended(); }));
+    CHECK(slow->end_reason() == EndReason::SlowConsumer);
+
+    auto again = pub.subscribe("bridge", {1}, {{1, 3}}); // last received + 1
+    REQUIRE(again.error == SubscribeError::None);
+    outbox.push(event(1, 11));
+    finish(outbox, pub);
+    CHECK(drain_seqs(*again.subscription) == std::vector<Seq>{3, 4, 5, 6, 7, 8, 9, 10, 11});
+}
+
+// Subscribers join with a random from_seq while events flow. Catch-up and
+// going live happen under one lock, so each must see F, F+1, F+2... exactly.
+TEST_CASE("from_seq subscribers racing a live publisher never see a gap or a duplicate",
+          "[publisher][concurrency]") {
+    constexpr Seq kEvents = 50000;
+    BlockingQueue<Output> outbox;
+    FakeRequester req;
+    MarketDataPublisher pub(outbox, {1}, req.fn(),
+                            PublisherOptions{.queue_capacity = kEvents, .replay_window = kEvents});
+    pub.start();
+
+    std::atomic<Seq> published{0};
+    std::jthread producer([&] {
+        for (Seq seq = 1; seq <= kEvents; ++seq) {
+            outbox.push(event(1, seq));
+            published = seq;
+            if (seq % 512 == 0)
+                std::this_thread::yield();
+        }
+    });
+
+    std::mt19937 rng(12345);
+    int subscribers = 0;
+    while (published.load() < kEvents) {
+        // Routed so far is at most published, so `from` is within the window or at most a little ahead.
+        const Seq latest = published.load();
+        const Seq from = std::uniform_int_distribution<Seq>(1, latest + 1)(rng);
+        auto result = pub.subscribe("racer-" + std::to_string(subscribers++), {1}, {{1, from}});
+        REQUIRE(result.error == SubscribeError::None);
+        const Seq stop_at = std::min<Seq>(from + 200, kEvents);
+        for (Seq expect = from; expect <= stop_at; ++expect) {
+            auto item = result.subscription->next_for(5s);
+            REQUIRE(item.has_value());
+            REQUIRE(std::get<MarketEvent>(*item).event.sequence_number == expect);
+        }
+        pub.unsubscribe(result.subscription->id());
+    }
+    producer.join();
+    CHECK(subscribers > 0);
+    finish(outbox, pub);
 }
 
 TEST_CASE("events before the snapshot are skipped; events after it are delivered in order", "[publisher]") {
